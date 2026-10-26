@@ -62,7 +62,14 @@ def _preamble(target_name: str, identifiers: dict[str, str]) -> list[str]:
 
 
 NUMERIC_TYPES = {"INT", "UINT", "FLOAT"}
-ITEM_KEYWORDS = ("APPEND_ITEM", "APPEND_ID_ITEM", "APPEND_PARAMETER", "APPEND_ID_PARAMETER")
+ITEM_KEYWORDS = (
+    "APPEND_ITEM",
+    "APPEND_ID_ITEM",
+    "APPEND_ARRAY_ITEM",
+    "APPEND_PARAMETER",
+    "APPEND_ID_PARAMETER",
+    "APPEND_ARRAY_PARAMETER",
+)
 
 
 def _big_endian(lines: list[str]) -> list[str]:

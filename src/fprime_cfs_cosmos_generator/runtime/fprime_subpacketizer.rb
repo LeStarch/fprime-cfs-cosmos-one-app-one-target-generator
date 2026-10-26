@@ -1,3 +1,4 @@
+# Generated F Prime cFS runtime support. Do not edit.
 require 'openc3/subpacketizers/subpacketizer'
 require 'openc3/system/system'
 require 'openc3/utilities/logger'

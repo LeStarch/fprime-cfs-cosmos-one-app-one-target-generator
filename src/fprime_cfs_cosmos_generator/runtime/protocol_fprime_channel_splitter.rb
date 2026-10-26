@@ -2,15 +2,20 @@
 #
 # Svc::TlmChan packs several channel records (id, time, value) into one com buffer and CfsTlmFramer wraps
 # that buffer in a single CCSDS telemetry packet. COSMOS packets are fixed layouts, so this READ protocol
-# splits such a packet into one packet per record, each carrying a copy of the cFS header and the F Prime
-# descriptor, and hands them out one at a time (Interface#read drains pending data through the blank read).
-# Works on every COSMOS 6.x. Packets whose stream id is not a channelized F Prime MID pass through untouched.
+# splits such a packet into one packet per record, each carrying a copy of the cFS header (with its own
+# CCSDS_LENGTH) and the F Prime descriptor, and hands them out one at a time (Interface#read drains pending
+# data through the blank read). Record lengths are measured with the channel's own COSMOS definition, so
+# variable-length (string) channels split correctly. Works on every COSMOS 6.x. Packets whose stream id is
+# not a channelized F Prime MID pass through untouched.
+#
+#   PROTOCOL READ ProtocolFprimeChannelSplitter [stream_id_item]   (default CCSDS_STREAMID)
 require 'openc3/interfaces/protocols/protocol'
+require 'openc3/utilities/logger'
 
 module OpenC3
   class ProtocolFprimeChannelSplitter < Protocol
     CFS_TLM_HEADER_BYTES = 12
-    STREAM_ID_ITEM = 'CCSDS_STREAMID'.freeze
+    LENGTH_OFFSET = 4
     DESCRIPTOR_ITEM = 'FPRIME_DESCRIPTOR'.freeze
     CHANNEL_ID_ITEM = 'FPRIME_CHANNEL_ID'.freeze
 
@@ -18,8 +23,9 @@ module OpenC3
       attr_accessor :telemetry_source
     end
 
-    def initialize(allow_empty_data = nil)
+    def initialize(stream_id_item = 'CCSDS_STREAMID', allow_empty_data = nil)
       super(allow_empty_data)
+      @stream_id_item = stream_id_item.to_s.upcase
       @pending = []
       @table = nil
     end
@@ -34,56 +40,92 @@ module OpenC3
         return @pending.shift, extra unless @pending.empty?
         return super(data, extra)
       end
-      records = split(data)
-      return super(data, extra) if records.nil? || records.length <= 1
-      @pending.concat(records[1..])
-      return records[0], extra
+      pieces = split(data)
+      return super(data, extra) if pieces.nil? || pieces.length <= 1
+      @pending.concat(pieces[1..])
+      return pieces[0], extra
     end
 
     private
 
-    # { stream_id => { descriptor_bytes:, id_bytes:, channels: { channel_id => record_bytes } } }
+    # { stream_id => { prefix_bytes:, id_bytes:, channels: { channel_id => Packet } } }
     def table
       return @table if @table
       @table = {}
       telemetry = (self.class.telemetry_source || -> { System.telemetry }).call
       targets = @interface ? @interface.target_names : telemetry.target_names
+      candidates = 0
       targets.each do |target|
         telemetry.packets(target).each_value do |packet|
-          next unless packet.items.key?(STREAM_ID_ITEM) && packet.items.key?(CHANNEL_ID_ITEM)
-          stream = packet.get_item(STREAM_ID_ITEM)
+          next unless packet.items.key?(CHANNEL_ID_ITEM)
+          candidates += 1
+          stream = stream_id_item(packet)
           channel = packet.get_item(CHANNEL_ID_ITEM)
-          next unless stream.id_value && channel.id_value
+          next unless stream && stream.id_value && channel.id_value
+          descriptor_bytes = packet.items.key?(DESCRIPTOR_ITEM) ? packet.get_item(DESCRIPTOR_ITEM).bit_size / 8 : 0
           entry = @table[stream.id_value] ||= {
-            descriptor_bytes: packet.items.key?(DESCRIPTOR_ITEM) ? packet.get_item(DESCRIPTOR_ITEM).bit_size / 8 : 0,
+            prefix_bytes: CFS_TLM_HEADER_BYTES + descriptor_bytes,
             id_bytes: channel.bit_size / 8,
             channels: {}
           }
-          entry[:channels][channel.id_value] = packet.defined_length - CFS_TLM_HEADER_BYTES - entry[:descriptor_bytes]
+          entry[:channels][channel.id_value] = packet
         end
       end
+      if candidates > 0 && @table.empty?
+        Logger.warn("ProtocolFprimeChannelSplitter: #{candidates} channel packets but no #{@stream_id_item} ID item; nothing will be split")
+      end
       @table
+    end
+
+    def stream_id_item(packet)
+      return packet.get_item(@stream_id_item) if packet.items.key?(@stream_id_item)
+      packet.id_items.find { |item| item.bit_offset == 0 && item.bit_size == 16 }
     end
 
     def split(data)
       return nil if data.length < CFS_TLM_HEADER_BYTES + 2
       entry = table[data[0, 2].unpack1('n')]
       return nil unless entry
-      prefix_length = CFS_TLM_HEADER_BYTES + entry[:descriptor_bytes]
-      prefix = data[0, prefix_length]
-      offset = prefix_length
-      records = []
+      prefix = data[0, entry[:prefix_bytes]]
+      offset = entry[:prefix_bytes]
+      pieces = []
       while offset + entry[:id_bytes] <= data.length
         id = unpack_id(data[offset, entry[:id_bytes]])
-        record_length = entry[:channels][id]
-        unless record_length && offset + record_length <= data.length
-          Logger.warn("ProtocolFprimeChannelSplitter: unknown or truncated channel record id #{id} at byte #{offset}")
+        packet = entry[:channels][id]
+        unless packet
+          Logger.warn("ProtocolFprimeChannelSplitter: unknown channel id #{id} at byte #{offset}")
           break
         end
-        records << (prefix + data[offset, record_length])
-        offset += record_length
+        piece = prefix + data[offset..]
+        length = record_length(packet, piece)
+        if length > piece.bytesize
+          Logger.warn("ProtocolFprimeChannelSplitter: truncated channel id #{id} at byte #{offset}")
+          break
+        end
+        piece = piece[0, length]
+        piece[LENGTH_OFFSET, 2] = [piece.bytesize - 7].pack('n')
+        pieces << piece
+        offset += length - entry[:prefix_bytes]
       end
-      records.empty? ? nil : records
+      pieces.empty? ? nil : pieces
+    end
+
+    # Bytes of a complete channel packet (header + descriptor + record) measured against the channel's items
+    def record_length(packet, buffer)
+      end_bits = packet.defined_length_bits
+      packet.sorted_items.each do |item|
+        next if item.data_type == :DERIVED || item.bit_offset < 0
+        bits = if item.variable_bit_size
+                 count = packet.read(item.variable_bit_size['length_item_name'], :RAW, buffer)
+                 count * item.variable_bit_size['length_bits_per_count'] + item.variable_bit_size['length_value_bit_offset']
+               elsif item.array_size
+                 item.array_size
+               else
+                 item.bit_size
+               end
+        end_bits = [end_bits, item.bit_offset + bits].max
+      end
+      (end_bits + 7) / 8
     end
 
     def unpack_id(bytes)

@@ -156,3 +156,25 @@ def test_target_names_are_uppercased_and_output_is_guarded(dictionary, tmp_path)
     with pytest.raises(generator.GeneratorError, match="not a generated bundle"):
         generator.write_bundle(app, tmp_path, "PLAIN")
     assert (tmp_path / "PLAIN" / "keep.txt").exists()
+
+
+def test_big_endian_covers_scalars_and_arrays_only():
+    lines = [
+        'APPEND_ITEM a 32 UINT "desc"',
+        'APPEND_ARRAY_ITEM b 32 UINT 128 "desc"',
+        'APPEND_PARAMETER c 16 INT MIN MAX 0 "desc"',
+        'APPEND_ARRAY_PARAMETER d 32 FLOAT 64 "desc"',
+        'APPEND_ITEM s 0 STRING "desc"',
+        'APPEND_ITEM e 8 UINT "desc" LITTLE_ENDIAN',
+        "    META FPRIME_TYPE U32Type",
+    ]
+    out = generator._big_endian(lines)
+    assert out[0:4] == [line + " BIG_ENDIAN" for line in lines[0:4]]
+    assert out[4:] == lines[4:]
+
+
+def test_every_runtime_file_is_stamped_as_generated():
+    from fprime_cfs_cosmos_generator import merge
+
+    for path in generator.RUNTIME.iterdir():
+        assert merge._generated(path), path.name

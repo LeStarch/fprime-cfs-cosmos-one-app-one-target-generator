@@ -57,7 +57,7 @@ raise 'channel not identified' unless id && id.packet_name.upcase == 'CFSCORE.CM
 # --- multi-record TlmChan packet through the READ splitter (two channels in one CCSDS packet)
 if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   OpenC3::ProtocolFprimeChannelSplitter.telemetry_source = -> { tlm }
-  splitter = OpenC3::ProtocolFprimeChannelSplitter.new(false)
+  splitter = OpenC3::ProtocolFprimeChannelSplitter.new('CCSDS_STREAMID', false)
   errors = tlm.packet(target, 'CfsCore.cmdDisp.CommandErrors')
   err_id = errors.get_item('FPRIME_CHANNEL_ID').id_value
   rec1 = [chan_id, 2, 0, 1000, 500, 77].pack('NnCNNN')
@@ -72,6 +72,23 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   puts "splitter -> #{a.packet_name}=#{a.read('CommandsDispatched')} #{b.packet_name}=#{b.read('CommandErrors')}"
   raise 'split records wrong' unless a.read('CommandsDispatched') == 77 && b.read('CommandErrors') == 5
   raise 'split record length wrong' unless first.bytesize == chan.defined_length && second.bytesize == errors.defined_length
+  raise 'piece CCSDS_LENGTH wrong' unless first[4, 2].unpack1('n') == first.bytesize - 7 && second[4, 2].unpack1('n') == second.bytesize - 7
+  # string channel (variable length) in both orders
+  version = tlm.packet(target, 'CfsCore.version.FrameworkVersion')
+  ver_id = version.get_item('FPRIME_CHANNEL_ID').id_value
+  rec_s = [ver_id, 2, 0, 1002, 502, 6].pack('NnCNNn') + 'v4.3.0'
+  [[rec_s, rec1], [rec1, rec_s]].each do |order|
+    buf = hdr + [1].pack('n') + order.join
+    buf[4, 2] = [buf.bytesize - 7].pack('n')
+    p1, = splitter.read_data(buf)
+    p2, = splitter.read_data('')
+    rest, = splitter.read_data('')
+    raise 'string split failed' unless p1.is_a?(String) && p2.is_a?(String) && rest == :STOP
+    decoded = [p1, p2].map { |piece| identify(tlm, target, piece) }
+    values = decoded.map { |pk| pk.packet_name.end_with?('FRAMEWORKVERSION') ? pk.read('FrameworkVersion') : pk.read('CommandsDispatched') }
+    puts "splitter string case -> #{decoded.map(&:packet_name).join(', ')} = #{values.inspect}"
+    raise 'string channel split wrong' unless values.sort_by(&:to_s) == ['77', 'v4.3.0'].sort_by(&:to_s).map { |v| v == '77' ? 77 : v }
+  end
   packets_hdr = [0x0820, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
   passthrough, = splitter.read_data(packets_hdr + [32, 1].pack('nn') + ("\0" * 40))
   raise 'non-channel packet must pass through' unless passthrough.bytesize == packets_hdr.bytesize + 44

@@ -220,7 +220,7 @@ def _generated(path: Path) -> bool:
     if path.is_dir():
         return (path / "cmd_tlm" / "fprime_cmd.txt").is_file()
     try:
-        return path.read_text().startswith("# Generated F Prime cFS") or "OpenC3\n  class Protocol" in path.read_text()
+        return path.read_text().startswith("# Generated F Prime cFS")
     except (OSError, UnicodeDecodeError):
         return False
 

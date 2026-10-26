@@ -1,3 +1,4 @@
+# Generated F Prime cFS runtime support. Do not edit.
 require 'openc3/interfaces/protocols/protocol'
 
 module OpenC3
