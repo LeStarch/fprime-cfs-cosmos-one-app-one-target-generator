@@ -1,0 +1,272 @@
+"""Generate an independent COSMOS target bundle for one F Prime cFS application."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+from dataclasses import dataclass
+from importlib import resources
+from pathlib import Path
+
+from fprime_cosmos import cfs, emit
+from fprime_cosmos.dictionary import FprimeDictionary
+
+RUNTIME = resources.files("fprime_cfs_cosmos_generator") / "runtime"
+TARGET_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+SUBPACKETIZER = "fprime_subpacketizer.rb"
+CHECKSUM_PROTOCOL = "protocol_ccsds_checksum_compat.rb"
+COMMANDS_FILE = "fprime_cmd.txt"
+TELEMETRY_FILE = "fprime_tlm.txt"
+MESSAGE_IDS_FILE = "fprime_msg_id.rb"
+
+
+class GeneratorError(Exception):
+    """The dictionary or requested output cannot form a standalone target bundle."""
+
+
+@dataclass(frozen=True)
+class BundleArtifacts:
+    directory: Path
+    target_name: str
+    manifest_path: Path
+
+
+def _ruby_string(text: str) -> str:
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _preamble(target_name: str, identifiers: dict[str, str]) -> list[str]:
+    lines = [
+        "<%",
+        "  require 'global_defs'",
+        "  require 'cfs_ccsds'",
+        "  require 'fsw_msg_id'",
+        "  require 'fsw_config_param'",
+        "  require 'fprime_msg_id'",
+        "",
+        f"  @APP_PREFIX_STR = {_ruby_string(target_name)}",
+    ]
+    lines.extend(f"  @{name} = FprimeMsgId::{constant}" for name, constant in identifiers.items())
+    lines.extend(["", "%>", ""])
+    return lines
+
+
+def _payload_bytes(command, app: cfs.CfsApp) -> int:
+    bits = app.dictionary.layout.descriptor_bits + app.dictionary.layout.opcode_bits
+    bits += sum(arg_type.getMaxSize() * 8 for _name, _description, arg_type in command.get_args())
+    if bits % 8:
+        raise GeneratorError(f"{command.get_full_name()}: F Prime command payload is not byte aligned ({bits} bits)")
+    return bits // 8
+
+
+def emit_commands(app: cfs.CfsApp, target_name: str) -> str:
+    lines = _preamble(target_name, {"CMD_MID_STR": "CMD_MID"})
+    for command in app.dictionary.commands:
+        lines.append(
+            f"COMMAND <%= @APP_PREFIX_STR %> {emit.full_name(command)} "
+            f"<%= Globals::Cfg.processor_endian %> {emit.quote(command.get_description())}"
+        )
+        lines.append(
+            f"  <%= Ccsds.cmd(@CMD_MID_STR, {app.function_code}, {_payload_bytes(command, app)}) %>"
+        )
+        lines.extend(emit.emit_command(command, app.dictionary.layout)[1:])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _telemetry_parent(
+    name: str,
+    mid_variable: str,
+    description: str,
+    block_name: str,
+    block_description: str,
+) -> list[str]:
+    return [
+        f"TELEMETRY <%= @APP_PREFIX_STR %> {name} <%= Globals::Cfg.processor_endian %> {emit.quote(description)}",
+        f"  <%= Ccsds.tlm(@{mid_variable}) %>",
+        f"  SUBPACKETIZER {SUBPACKETIZER}",
+        f"  APPEND_ITEM {block_name} 0 BLOCK {emit.quote(block_description)}",
+        "    HIDDEN",
+    ]
+
+
+def _telemetry_packet(packet, app: cfs.CfsApp) -> list[str]:
+    lines = [
+        f"TELEMETRY <%= @APP_PREFIX_STR %> {emit.full_name(packet)} "
+        f"<%= Globals::Cfg.processor_endian %> {emit.quote(f'F Prime packetized telemetry {packet.get_name()}')}",
+        "  SUBPACKET",
+    ]
+    lines.extend(emit.emit_packet(packet, app.dictionary.layout, cfs.TIME_CONVERSION)[1:])
+    return lines
+
+
+def _telemetry_channel(channel, app: cfs.CfsApp) -> list[str]:
+    lines = [
+        f"TELEMETRY <%= @APP_PREFIX_STR %> {emit.full_name(channel)} "
+        f"<%= Globals::Cfg.processor_endian %> {emit.quote(channel.get_ch_desc())}",
+    ]
+    lines.extend(emit.emit_channel(channel, app.dictionary.layout, cfs.TIME_CONVERSION)[1:])
+    return lines
+
+
+def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True) -> str:
+    identifiers = {"PACKETS_TLM_MID_STR": "PACKETS_TLM_MID"}
+    if channelized:
+        identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
+    blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
+    blocks.append(
+        "\n".join(
+            _telemetry_parent(
+                "FPRIME_PACKETS",
+                "PACKETS_TLM_MID_STR",
+                "F Prime packetized telemetry",
+                "PACKET",
+                "F Prime telemetry packet",
+            )
+        )
+    )
+    blocks.extend("\n".join(_telemetry_packet(packet, app)) for packet in app.dictionary.packets)
+    if channelized:
+        blocks.append(
+            "\n".join(
+                _telemetry_parent(
+                    "FPRIME_CHANNELS",
+                    "CHANNELS_TLM_MID_STR",
+                    "F Prime channelized telemetry",
+                    "CHANNELS",
+                    "F Prime packet descriptor and concatenated channel records",
+                )
+            )
+        )
+        blocks.extend("\n".join(_telemetry_channel(channel, app)) for channel in app.dictionary.channels)
+    return "\n\n".join(blocks) + "\n"
+
+
+def emit_message_ids(app: cfs.CfsApp, channelized: bool = True) -> str:
+    lines = [
+        "# Generated F Prime cFS message identifiers. Do not edit.",
+        "module FprimeMsgId",
+        f"  CMD_MID = '{app.command_mid:#06x}'",
+        f"  PACKETS_TLM_MID = '{app.packets_mid:#06x}'",
+    ]
+    if channelized:
+        lines.append(f"  CHANNELS_TLM_MID = '{app.channels_mid:#06x}'")
+    lines.extend(["end", ""])
+    return "\n".join(lines)
+
+
+def emit_target() -> str:
+    return "\n".join(
+        [
+            "LANGUAGE ruby",
+            f"COMMANDS cmd_tlm/{COMMANDS_FILE}",
+            f"TELEMETRY cmd_tlm/{TELEMETRY_FILE}",
+            "",
+        ]
+    )
+
+
+def emit_plugin_fragment(target_name: str) -> str:
+    variable = f"fprime_{target_name.lower()}_target_name"
+    return "\n".join(
+        [
+            "# Merge the VARIABLE at plugin scope.",
+            f"VARIABLE {variable} {target_name}",
+            f'VARIABLE_DESCRIPTION "COSMOS target name for the F Prime application {target_name}"',
+            "",
+            "# Merge these lines under the existing shared UDP INTERFACE.",
+            f"  MAP_TARGET <%= {variable} %>",
+            "  PROTOCOL WRITE ProtocolCcsdsChecksumCompat",
+            "",
+        ]
+    )
+
+
+def _copy_runtime(output: Path) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    for name in (SUBPACKETIZER, CHECKSUM_PROTOCOL):
+        with resources.as_file(RUNTIME / name) as source:
+            shutil.copy2(source, output / name)
+
+
+def _manifest(app: cfs.CfsApp, target_name: str, channelized: bool, dictionary: FprimeDictionary) -> dict:
+    mids = {"command": app.command_mid, "packetized_telemetry": app.packets_mid}
+    if channelized:
+        mids["channelized_telemetry"] = app.channels_mid
+    return {
+        "schema_version": 1,
+        "target": target_name,
+        "application": app.name,
+        "dictionary": dictionary.path.name,
+        "dictionary_sha256": hashlib.sha256(dictionary.path.read_bytes()).hexdigest(),
+        "function_code": app.function_code,
+        "message_ids": {name: f"{mid:#06x}" for name, mid in mids.items()},
+        "shared_files": [f"lib/{SUBPACKETIZER}", f"lib/{CHECKSUM_PROTOCOL}"],
+        "required_helpers": ["global_defs", "cfs_ccsds", "fsw_msg_id", "fsw_config_param"],
+    }
+
+
+def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manifests: tuple[Path, ...]) -> None:
+    requested = app.message_ids(channelized)
+    if len(set(requested.values())) != len(requested):
+        raise GeneratorError(f"{app.name}: command and telemetry message identifiers must be distinct")
+    for path in manifests:
+        try:
+            reserved = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise GeneratorError(f"Cannot read reserved manifest {path}: {error}") from error
+        if reserved.get("target") == target_name:
+            raise GeneratorError(f"Target name {target_name} is already reserved by {path}")
+        for reserved_kind, value in reserved.get("message_ids", {}).items():
+            try:
+                reserved_mid = int(value, 0) if isinstance(value, str) else int(value)
+            except (TypeError, ValueError) as error:
+                raise GeneratorError(f"Invalid message id {value!r} in reserved manifest {path}") from error
+            for requested_kind, requested_mid in requested.items():
+                if requested_mid == reserved_mid:
+                    raise GeneratorError(
+                        f"Message id {requested_mid:#06x} ({requested_kind}) is already reserved as "
+                        f"{reserved_kind} by {path}"
+                    )
+
+
+def write_bundle(
+    app: cfs.CfsApp,
+    output: Path,
+    target_name: str | None = None,
+    channelized: bool = True,
+    reserved_manifests: tuple[Path, ...] = (),
+) -> BundleArtifacts:
+    target_name = target_name or app.name.upper()
+    if not TARGET_NAME.fullmatch(target_name):
+        raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
+    _check_reserved(app, target_name, channelized, reserved_manifests)
+    output = Path(output) / target_name
+    if output.exists():
+        shutil.rmtree(output)
+    cmd_tlm = output / "targets" / target_name / "cmd_tlm"
+    cmd_tlm.mkdir(parents=True)
+    (cmd_tlm.parent / "target.txt").write_text(emit_target())
+    (cmd_tlm / COMMANDS_FILE).write_text(emit_commands(app, target_name))
+    (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, channelized))
+    lib = output / "lib"
+    _copy_runtime(lib)
+    (lib / MESSAGE_IDS_FILE).write_text(emit_message_ids(app, channelized))
+    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name))
+    manifest_path = output / "manifest.json"
+    manifest_path.write_text(json.dumps(_manifest(app, target_name, channelized, app.dictionary), indent=2) + "\n")
+    return BundleArtifacts(output, target_name, manifest_path)
+
+
+def build_bundle(
+    dictionary_path: str | Path,
+    output: str | Path,
+    target_name: str | None = None,
+    packet_set_name: str | None = None,
+    channelized: bool = True,
+    reserved_manifests: tuple[Path, ...] = (),
+) -> BundleArtifacts:
+    dictionary = FprimeDictionary(dictionary_path, packet_set_name)
+    return write_bundle(cfs.cfs_app(dictionary), Path(output), target_name, channelized, reserved_manifests)
