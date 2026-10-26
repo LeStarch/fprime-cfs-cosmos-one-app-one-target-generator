@@ -210,7 +210,7 @@ def merge(
         raise MergeError("at least one bundle is required")
     check_collisions(bundles, reserved_manifests)
 
-    new_text, additions, interface_name = merge_plugin_text(plugin_file.read_text(), bundles, interface)
+    new_text, additions, interface_name = merge_plugin_text(plugin_file.read_bytes().decode(), bundles, interface)
     report = MergeReport(plugin, interface_name, plugin_additions=additions)
     shared_seen: dict[str, Path] = {}
     for bundle in bundles:
@@ -228,5 +228,5 @@ def merge(
     if dry_run:
         return report
     if additions:
-        plugin_file.write_text(new_text)
+        plugin_file.write_bytes(new_text.encode())
     return report
