@@ -40,18 +40,33 @@ fprime-cfs-cosmos-merge --plugin path/to/cfs-cosmos-plugin \
 
 For each bundle the merge copies `targets/<APP>/` and `lib/fprime_<app>_msg_id.rb`, places the shared
 runtime files once (they must be byte-identical across bundles), appends the `VARIABLE` lines after the
-plugin's existing `VARIABLE`s, and appends `MAP_TARGET <%= ... %>` plus a single
-`PROTOCOL WRITE ProtocolCcsdsChecksumCompat` to the end of the chosen `INTERFACE` block. The interface is
+plugin's existing `VARIABLE`s, inserts `TARGET <APP> <%= ... %>` immediately before the chosen `INTERFACE`
+(`--skip-target` if the plugin declares targets itself), and appends `MAP_TARGET <%= ... %>` plus a single
+`PROTOCOL WRITE ProtocolCcsdsChecksumCompat` (and `PROTOCOL READ ProtocolFprimeChannelSplitter` for flat
+channelized bundles) to the end of that `INTERFACE` block. The interface is
 the only `INTERFACE` in `plugin.txt` or the one selected by `--interface`. Nothing else in the plugin is
 touched; ordinary cFS targets stay as they are. Target names and message IDs are checked for collisions
 across all bundles and `--reserved-manifest` files before anything is written. Re-running the merge is a
-no-op; an existing target with different content is an error unless `--force` is given.
+no-op; an existing target with different content is an error unless `--force` is given, and `--force` only
+ever replaces content this tool generated. All conflicts are detected before anything is written.
+
+## Wire-format notes
+
+- F Prime serializes big-endian whatever the cFS processor endianness is, so every F Prime item carries an
+  explicit `BIG_ENDIAN`; only the `Ccsds.*` header items follow `Globals::Cfg.processor_endian`.
+- `Ccsds.cmd(mid, fc, n)` receives the **maximum** F Prime command body (descriptor + opcode + arguments at
+  their maximum serialized size, e.g. `2 + 40` for a `String_40`). `ProtocolCcsdsChecksumCompat` rewrites
+  `CCSDS_LENGTH` from the bytes actually serialized before computing the checksum, so variable-length
+  strings go out with the correct length.
 
 ## Telemetry modes
 
 - **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the
   `Ccsds.tlm` header plus `FPRIME_DESCRIPTOR`/`FPRIME_PACKET_ID` (or `FPRIME_CHANNEL_ID`) ID items.
-  Works on every COSMOS 6.x; matches `CfsTlmFramer`, which wraps one F Prime com packet per CCSDS packet.
+  Works on every COSMOS 6.x. `TlmPacketizer` packets arrive one per CCSDS packet. `TlmChan` packs several
+  channel records into one CCSDS packet, so the bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
+  protocol (wired by the fragment) that splits such a packet into one COSMOS packet per record, each with a
+  copy of the cFS header and descriptor.
 - **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
   F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 

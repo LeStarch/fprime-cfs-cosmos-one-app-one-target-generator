@@ -6,4 +6,4 @@ set -euo pipefail
 bundle=$(realpath "$1"); target=$2; version=${3:-6.9.1}
 here=$(cd "$(dirname "$0")" && pwd)
 docker run --rm -v "$bundle:/b:ro" -v "$here/stubs:/stubs:ro" -v "$here/load_test.rb:/load_test.rb:ro" \
-  "openc3inc/openc3-cosmos-cmd-tlm-api:$version" ruby /load_test.rb /b "$target" 2>&1 | grep -v 'redis\|connection_pool\|store_\|^\s*from'
+  "openc3inc/openc3-cosmos-cmd-tlm-api:$version" ruby /load_test.rb /b "$target" 2>&1 | grep -v 'gems/redis\|gems/connection_pool\|store_queued.rb\|store_autoload.rb\|^\s*from /usr/lib/ruby'

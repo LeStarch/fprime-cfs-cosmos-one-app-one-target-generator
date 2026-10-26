@@ -13,6 +13,7 @@ def test_write_bundle_is_standalone(dictionary, tmp_path):
     assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()) == [
         "lib/fprime_ap_msg_id.rb",
         "lib/protocol_ccsds_checksum_compat.rb",
+        "lib/protocol_fprime_channel_splitter.rb",
         "manifest.json",
         "plugin.fragment.txt",
         "targets/AP/cmd_tlm/fprime_cmd.txt",
@@ -52,7 +53,10 @@ def test_flat_telemetry_identifies_each_record_by_mid_descriptor_and_id(dictiona
     assert "FPRIME_CHANNELS" not in telemetry
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["telemetry_mode"] == "flat"
-    assert manifest["shared_files"] == ["lib/protocol_ccsds_checksum_compat.rb"]
+    assert manifest["shared_files"] == [
+        "lib/protocol_ccsds_checksum_compat.rb",
+        "lib/protocol_fprime_channel_splitter.rb",
+    ]
 
 
 def test_subpacketizer_mode_for_cosmos_6_10(dictionary, tmp_path):
@@ -120,3 +124,35 @@ def test_checksum_runtime_updates_length_and_both_field_names():
     source = (generator.RUNTIME / generator.CHECKSUM_PROTOCOL).read_text()
     assert "['SEC_CRC', 'CCSDS_CHECKSUM']" in source
     assert "packet.buffer.bytesize - 7" in source
+
+
+def test_fprime_items_are_big_endian_regardless_of_processor_endian(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    for name in ("fprime_cmd.txt", "fprime_tlm.txt"):
+        for line in (root / "targets/AP/cmd_tlm" / name).read_text().splitlines():
+            tokens = line.split()
+            if tokens and tokens[0].startswith("APPEND_") and tokens[3] in {"INT", "UINT", "FLOAT"}:
+                assert tokens[-1] == "BIG_ENDIAN", line
+
+
+def test_fragment_declares_target_and_channel_splitter(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    fragment = (root / "plugin.fragment.txt").read_text()
+    assert "TARGET AP <%= fprime_ap_target_name %>" in fragment
+    assert "  PROTOCOL READ ProtocolFprimeChannelSplitter" in fragment
+    assert (root / "lib/protocol_fprime_channel_splitter.rb").exists()
+    flat_no_channels = generator.write_bundle(app, tmp_path / "nc", "AP", channelized=False).directory
+    assert "ProtocolFprimeChannelSplitter" not in (flat_no_channels / "plugin.fragment.txt").read_text()
+    assert not (flat_no_channels / "lib/protocol_fprime_channel_splitter.rb").exists()
+
+
+def test_target_names_are_uppercased_and_output_is_guarded(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    assert generator.write_bundle(app, tmp_path, "App_A").directory.name == "APP_A"
+    (tmp_path / "PLAIN").mkdir()
+    (tmp_path / "PLAIN" / "keep.txt").write_text("not generated")
+    with pytest.raises(generator.GeneratorError, match="not a generated bundle"):
+        generator.write_bundle(app, tmp_path, "PLAIN")
+    assert (tmp_path / "PLAIN" / "keep.txt").exists()

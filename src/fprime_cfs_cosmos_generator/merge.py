@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import filecmp
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -31,6 +32,14 @@ class Bundle:
     manifest: dict
     plugin_lines: list[str]
     interface_lines: list[str]
+
+    @property
+    def variable_lines(self) -> list[str]:
+        return [line for line in self.plugin_lines if line.startswith("VARIABLE")]
+
+    @property
+    def target_lines(self) -> list[str]:
+        return [line for line in self.plugin_lines if line.startswith("TARGET ")]
 
     @property
     def target(self) -> str:
@@ -65,6 +74,8 @@ def _bundle_files(manifest: dict, directory: Path) -> list[str]:
             raise MergeError(f"{directory}: manifest lists unexpected file {relative!r}")
         if not (directory / relative).exists():
             raise MergeError(f"{directory}: manifest lists missing file {relative}")
+        if any(path.is_symlink() for path in [directory / relative, *(directory / relative).rglob("*")]):
+            raise MergeError(f"{directory}: symbolic links are not allowed in a bundle ({relative})")
     return files
 
 
@@ -95,11 +106,15 @@ def check_collisions(bundles: list[Bundle], reserved_manifests: tuple[Path, ...]
     entries.extend((json.loads(Path(path).read_text()), str(path)) for path in reserved_manifests)
     for manifest, origin in entries:
         target = manifest.get("target")
-        if target in targets:
-            raise MergeError(f"target {target} is provided by both {targets[target]} and {origin}")
-        targets[target] = origin
+        if target is not None:
+            if target.upper() in targets:
+                raise MergeError(f"target {target} is provided by both {targets[target.upper()]} and {origin}")
+            targets[target.upper()] = origin
         for kind, mid in manifest.get("message_ids", {}).items():
-            key = f"{int(str(mid), 0):#06x}"
+            try:
+                key = f"{int(str(mid), 0):#06x}"
+            except ValueError as error:
+                raise MergeError(f"{origin}: message id {kind}={mid!r} is not a number") from error
             if key in owners:
                 raise MergeError(f"message id {key} ({kind}) in {origin} collides with {owners[key]}")
             owners[key] = f"{origin} ({target} {kind})"
@@ -122,7 +137,8 @@ def _block_end(lines: list[str], start: int) -> int:
 def select_interface(lines: list[str], name: str | None) -> int:
     matches = [(index, match) for index, line in enumerate(lines) if (match := INTERFACE_LINE.match(line))]
     if name:
-        matches = [(index, match) for index, match in matches if name in match.group("name")]
+        exact = [(index, match) for index, match in matches if match.group("name") == name]
+        matches = exact or [(index, match) for index, match in matches if name in match.group("name")]
     if len(matches) == 1:
         return matches[0][0]
     names = ", ".join(match.group("name") for _index, match in matches) or "none"
@@ -130,7 +146,20 @@ def select_interface(lines: list[str], name: str | None) -> int:
     raise MergeError(f"{PLUGIN_FILE}: expected exactly one INTERFACE {hint}, found: {names}")
 
 
-def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None) -> tuple[str, list[str], str]:
+def _target_insert_index(lines: list[str], interface_start: int) -> int:
+    """TARGET must precede the INTERFACE that maps it (plugin.txt deploys in file order). An indented
+    INTERFACE sits inside an ERB block, so insert before the block's top-level opening line instead."""
+    if not lines[interface_start][0].isspace():
+        return interface_start
+    index = interface_start
+    while index > 0 and (not lines[index - 1].strip() or lines[index - 1][0].isspace()):
+        index -= 1
+    return max(index - 1, 0)
+
+
+def merge_plugin_text(
+    text: str, bundles: list[Bundle], interface: str | None, skip_target: bool = False
+) -> tuple[str, list[str], str]:
     newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.replace("\r\n", "\n").split("\n")
     if lines and lines[-1] == "":
@@ -154,26 +183,46 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None) -
     lines[end:end] = additions
 
     existing_plugin = {line.strip() for line in lines if line and not line[0].isspace()}
-    plugin_additions: list[str] = []
-    for bundle in bundles:
-        for line in bundle.plugin_lines:
-            if line not in existing_plugin and line not in plugin_additions:
-                plugin_additions.append(line)
+
+    def new_lines(selector) -> list[str]:
+        result: list[str] = []
+        for bundle in bundles:
+            for line in selector(bundle):
+                if line not in existing_plugin and line not in result:
+                    result.append(line)
+        return result
+
+    target_lines = [] if skip_target else new_lines(lambda bundle: bundle.target_lines)
+    variable_lines = new_lines(lambda bundle: bundle.variable_lines)
     variable_indices = [
-        index for index, line in enumerate(lines) if line.startswith(("VARIABLE ", "VARIABLE_DESCRIPTION"))
+        index for index, line in enumerate(lines[:start]) if line.startswith(("VARIABLE ", "VARIABLE_DESCRIPTION"))
     ]
-    insert_at = variable_indices[-1] + 1 if variable_indices else 0
-    lines[insert_at:insert_at] = plugin_additions
+    insert_at = variable_indices[-1] + 1 if variable_indices else _target_insert_index(lines, start)
+    lines[insert_at:insert_at] = variable_lines + target_lines
+    plugin_additions = variable_lines + target_lines
     return newline.join(lines) + newline, additions + plugin_additions, interface_name
 
 
 def _same_tree(source: Path, destination: Path) -> bool:
     if source.is_file():
         return destination.is_file() and filecmp.cmp(source, destination, shallow=False)
-    comparison = filecmp.dircmp(source, destination)
-    if comparison.left_only or comparison.right_only or comparison.diff_files or comparison.funny_files:
+    if not destination.is_dir():
         return False
-    return all(_same_tree(source / name, destination / name) for name in comparison.common_dirs)
+    source_names = sorted(path.relative_to(source) for path in source.rglob("*"))
+    destination_names = sorted(path.relative_to(destination) for path in destination.rglob("*"))
+    if source_names != destination_names:
+        return False
+    return all(_same_tree(source / name, destination / name) for name in source_names if (source / name).is_file())
+
+
+def _generated(path: Path) -> bool:
+    """Only files/directories this tool produced may be replaced by --force"""
+    if path.is_dir():
+        return (path / "cmd_tlm" / "fprime_cmd.txt").is_file()
+    try:
+        return path.read_text().startswith("# Generated F Prime cFS") or "OpenC3\n  class Protocol" in path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def _place(source: Path, destination: Path, label: str, force: bool, write: bool, report: MergeReport) -> None:
@@ -183,6 +232,10 @@ def _place(source: Path, destination: Path, label: str, force: bool, write: bool
             return
         if not force:
             raise MergeError(f"{destination} exists with different content (use --force to replace)")
+        if not _generated(destination):
+            raise MergeError(
+                f"{destination} is not generated F Prime content; refusing to replace it even with --force"
+            )
         if write:
             shutil.rmtree(destination) if destination.is_dir() else destination.unlink()
     if not write:
@@ -200,6 +253,7 @@ def merge(
     reserved_manifests: tuple[Path, ...] = (),
     force: bool = False,
     dry_run: bool = False,
+    skip_target: bool = False,
 ) -> MergeReport:
     plugin = Path(plugin)
     plugin_file = plugin / PLUGIN_FILE
@@ -210,23 +264,33 @@ def merge(
         raise MergeError("at least one bundle is required")
     check_collisions(bundles, reserved_manifests)
 
-    new_text, additions, interface_name = merge_plugin_text(plugin_file.read_bytes().decode(), bundles, interface)
-    report = MergeReport(plugin, interface_name, plugin_additions=additions)
-    shared_seen: dict[str, Path] = {}
-    for bundle in bundles:
-        for relative in bundle.manifest.get("target_files", []):
-            source, label = bundle.directory / relative, f"{bundle.target}: {relative}"
-            _place(source, plugin / relative, label, force, not dry_run, report)
-        for relative in bundle.manifest.get("shared_files", []):
-            source, label = bundle.directory / relative, f"{bundle.target}: {relative}"
-            if relative in shared_seen:
-                if not filecmp.cmp(source, shared_seen[relative], shallow=False):
-                    raise MergeError(f"shared file {relative} differs between {shared_seen[relative]} and {source}")
-                continue
-            shared_seen[relative] = source
-            _place(source, plugin / relative, label, force, not dry_run, report)
+    new_text, additions, interface_name = merge_plugin_text(
+        plugin_file.read_bytes().decode(), bundles, interface, skip_target
+    )
+
+    def place_all(write: bool) -> MergeReport:
+        report = MergeReport(plugin, interface_name, plugin_additions=additions)
+        shared_seen: dict[str, Path] = {}
+        for bundle in bundles:
+            for relative in bundle.manifest.get("target_files", []):
+                source, label = bundle.directory / relative, f"{bundle.target}: {relative}"
+                _place(source, plugin / relative, label, force, write, report)
+            for relative in bundle.manifest.get("shared_files", []):
+                source, label = bundle.directory / relative, f"{bundle.target}: {relative}"
+                if relative in shared_seen:
+                    if not filecmp.cmp(source, shared_seen[relative], shallow=False):
+                        raise MergeError(f"shared file {relative} differs between {shared_seen[relative]} and {source}")
+                    continue
+                shared_seen[relative] = source
+                _place(source, plugin / relative, label, force, write, report)
+        return report
+
+    report = place_all(write=False)
     if dry_run:
         return report
+    report = place_all(write=True)
     if additions:
-        plugin_file.write_bytes(new_text.encode())
+        temporary = plugin_file.with_name(plugin_file.name + ".fprime-merge.tmp")
+        temporary.write_bytes(new_text.encode())
+        os.replace(temporary, plugin_file)
     return report

@@ -2,7 +2,7 @@
 module Globals
   module Cfg
     def self.processor_endian
-      'BIG_ENDIAN'
+      'LITTLE_ENDIAN'
     end
   end
 end

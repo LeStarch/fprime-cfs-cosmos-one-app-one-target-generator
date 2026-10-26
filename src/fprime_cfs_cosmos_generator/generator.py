@@ -17,6 +17,7 @@ RUNTIME = resources.files("fprime_cfs_cosmos_generator") / "runtime"
 TARGET_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 SUBPACKETIZER = "fprime_subpacketizer.rb"
 CHECKSUM_PROTOCOL = "protocol_ccsds_checksum_compat.rb"
+CHANNEL_SPLITTER = "protocol_fprime_channel_splitter.rb"
 COMMANDS_FILE = "fprime_cmd.txt"
 TELEMETRY_FILE = "fprime_tlm.txt"
 MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
@@ -60,6 +61,22 @@ def _preamble(target_name: str, identifiers: dict[str, str]) -> list[str]:
     return lines
 
 
+NUMERIC_TYPES = {"INT", "UINT", "FLOAT"}
+ITEM_KEYWORDS = ("APPEND_ITEM", "APPEND_ID_ITEM", "APPEND_PARAMETER", "APPEND_ID_PARAMETER")
+
+
+def _big_endian(lines: list[str]) -> list[str]:
+    """F Prime serializes big-endian regardless of the cFS processor endianness the packet defaults to"""
+    result = []
+    for line in lines:
+        tokens = line.split()
+        numeric = len(tokens) > 3 and tokens[0] in ITEM_KEYWORDS and tokens[3] in NUMERIC_TYPES
+        if numeric and not tokens[-1].endswith("_ENDIAN"):
+            line = f"{line.rstrip()} BIG_ENDIAN"
+        result.append(line)
+    return result
+
+
 def _payload_bytes(command, app: cfs.CfsApp) -> int:
     bits = app.dictionary.layout.descriptor_bits + app.dictionary.layout.opcode_bits
     bits += sum(arg_type.getMaxSize() * 8 for _name, _description, arg_type in command.get_args())
@@ -76,7 +93,7 @@ def emit_commands(app: cfs.CfsApp, target_name: str) -> str:
             f"<%= Globals::Cfg.processor_endian %> {emit.quote(command.get_description())}"
         )
         lines.append(f"  <%= Ccsds.cmd(@CMD_MID_STR, {app.function_code}, {_payload_bytes(command, app)}) %>")
-        lines.extend(emit.emit_command(command, app.dictionary.layout)[1:])
+        lines.extend(_big_endian(emit.emit_command(command, app.dictionary.layout)[1:]))
         lines.append("")
     return "\n".join(lines)
 
@@ -89,10 +106,16 @@ def _telemetry_header(name: str, mid_variable: str, description: str) -> list[st
 
 
 def _telemetry_parent(
-    name: str, mid_variable: str, description: str, block_name: str, block_description: str
+    name: str,
+    mid_variable: str,
+    description: str,
+    block_name: str,
+    block_description: str,
+    descriptor: list[str] = (),
 ) -> list[str]:
-    """COSMOS 6.10+ only: the whole F Prime body is a block that the subpacketizer resolves"""
+    """COSMOS 6.10+ only: the F Prime records are a block that the subpacketizer resolves"""
     lines = _telemetry_header(name, mid_variable, description)
+    lines.extend(descriptor)
     lines.append(f"  SUBPACKETIZER {SUBPACKETIZER}")
     lines.append(f"  APPEND_ITEM {block_name} 0 BLOCK {emit.quote(block_description)}")
     lines.append("    HIDDEN")
@@ -105,7 +128,7 @@ def _packet_description(packet) -> str:
 
 def _telemetry_packet(packet, app: cfs.CfsApp, subpacketizer: bool) -> list[str]:
     """One F Prime packet: a subpacket (6.10+) or a complete CCSDS packet identified by MID, descriptor, packet id"""
-    body = emit.emit_packet(packet, app.dictionary.layout, cfs.TIME_CONVERSION)[1:]
+    body = _big_endian(emit.emit_packet(packet, app.dictionary.layout, cfs.TIME_CONVERSION)[1:])
     if subpacketizer:
         header = _telemetry_header(emit.full_name(packet), "PACKETS_TLM_MID_STR", _packet_description(packet))[:1]
         return header + ["  SUBPACKET"] + body
@@ -115,11 +138,11 @@ def _telemetry_packet(packet, app: cfs.CfsApp, subpacketizer: bool) -> list[str]
 def _telemetry_channel(channel, app: cfs.CfsApp, subpacketizer: bool) -> list[str]:
     """One F Prime channel: a subpacket (6.10+) or a complete CCSDS packet identified by MID, descriptor, channel id"""
     layout = app.dictionary.layout
-    body = emit.emit_channel(channel, layout, cfs.TIME_CONVERSION)
+    body = _big_endian(emit.emit_channel(channel, layout, cfs.TIME_CONVERSION))
     if subpacketizer:
         header = _telemetry_header(emit.full_name(channel), "CHANNELS_TLM_MID_STR", channel.get_ch_desc())[:1]
         return header + body[1:]
-    descriptor = emit._item_lines(emit._descriptor_item(layout), layout.telemetry_descriptor)
+    descriptor = _big_endian(emit._item_lines(emit._descriptor_item(layout), layout.telemetry_descriptor))
     return (
         _telemetry_header(emit.full_name(channel), "CHANNELS_TLM_MID_STR", channel.get_ch_desc())
         + descriptor
@@ -155,7 +178,13 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
                         "CHANNELS_TLM_MID_STR",
                         "F Prime channelized telemetry",
                         "CHANNELS",
-                        "F Prime packet descriptor and channel record",
+                        "F Prime channel records (id, time, value)...",
+                        _big_endian(
+                            emit._item_lines(
+                                emit._descriptor_item(app.dictionary.layout),
+                                app.dictionary.layout.telemetry_descriptor,
+                            )
+                        ),
                     )
                 )
             )
@@ -187,29 +216,38 @@ def emit_target() -> str:
     )
 
 
-def emit_plugin_fragment(target_name: str) -> str:
+def emit_plugin_fragment(target_name: str, channelized: bool = True, subpacketizer: bool = False) -> str:
     variable = f"fprime_{target_name.lower()}_target_name"
+    protocols = ["  PROTOCOL WRITE ProtocolCcsdsChecksumCompat"]
+    if channelized and not subpacketizer:
+        protocols.append("  PROTOCOL READ ProtocolFprimeChannelSplitter")
     return "\n".join(
         [
-            "# Merge the VARIABLE at plugin scope.",
+            "# Merge the VARIABLE at plugin scope and the TARGET before the shared INTERFACE.",
             f"VARIABLE {variable} {target_name}",
             f'VARIABLE_DESCRIPTION "COSMOS target name for the F Prime application {target_name}"',
+            f"TARGET {target_name} <%= {variable} %>",
             "",
             "# Merge these lines under the existing shared UDP INTERFACE.",
             f"  MAP_TARGET <%= {variable} %>",
-            "  PROTOCOL WRITE ProtocolCcsdsChecksumCompat",
+            *protocols,
             "",
         ]
     )
 
 
-def _runtime_files(subpacketizer: bool) -> tuple[str, ...]:
-    return (CHECKSUM_PROTOCOL, SUBPACKETIZER) if subpacketizer else (CHECKSUM_PROTOCOL,)
+def _runtime_files(channelized: bool, subpacketizer: bool) -> tuple[str, ...]:
+    files = [CHECKSUM_PROTOCOL]
+    if subpacketizer:
+        files.append(SUBPACKETIZER)
+    elif channelized:
+        files.append(CHANNEL_SPLITTER)
+    return tuple(files)
 
 
-def _copy_runtime(output: Path, subpacketizer: bool) -> None:
+def _copy_runtime(output: Path, channelized: bool, subpacketizer: bool) -> None:
     output.mkdir(parents=True, exist_ok=True)
-    for name in _runtime_files(subpacketizer):
+    for name in _runtime_files(channelized, subpacketizer):
         with resources.as_file(RUNTIME / name) as source:
             shutil.copy2(source, output / name)
 
@@ -231,7 +269,7 @@ def _manifest(
         "minimum_cosmos_version": "6.10.0" if subpacketizer else "6.0.0",
         "message_ids": {name: f"{mid:#06x}" for name, mid in mids.items()},
         "target_files": [f"targets/{target_name}", f"lib/{message_ids_file(target_name)}"],
-        "shared_files": [f"lib/{name}" for name in _runtime_files(subpacketizer)],
+        "shared_files": [f"lib/{name}" for name in _runtime_files(channelized, subpacketizer)],
         "required_helpers": ["global_defs", "cfs_ccsds", "fsw_msg_id", "fsw_config_param"],
     }
 
@@ -268,12 +306,14 @@ def write_bundle(
     reserved_manifests: tuple[Path, ...] = (),
     subpacketizer: bool = False,
 ) -> BundleArtifacts:
-    target_name = target_name or app.name.upper()
+    target_name = (target_name or app.name).upper()
     if not TARGET_NAME.fullmatch(target_name):
         raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
     _check_reserved(app, target_name, channelized, reserved_manifests)
     output = Path(output) / target_name
     if output.exists():
+        if not (output / "manifest.json").is_file():
+            raise GeneratorError(f"{output} exists and is not a generated bundle; refusing to replace it")
         shutil.rmtree(output)
     cmd_tlm = output / "targets" / target_name / "cmd_tlm"
     cmd_tlm.mkdir(parents=True)
@@ -281,9 +321,9 @@ def write_bundle(
     (cmd_tlm / COMMANDS_FILE).write_text(emit_commands(app, target_name))
     (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, channelized, subpacketizer))
     lib = output / "lib"
-    _copy_runtime(lib, subpacketizer)
+    _copy_runtime(lib, channelized, subpacketizer)
     (lib / message_ids_file(target_name)).write_text(emit_message_ids(app, target_name, channelized))
-    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name))
+    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name, channelized, subpacketizer))
     manifest_path = output / "manifest.json"
     manifest_path.write_text(
         json.dumps(_manifest(app, target_name, channelized, subpacketizer, app.dictionary), indent=2) + "\n"

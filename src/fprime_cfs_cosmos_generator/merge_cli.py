@@ -26,6 +26,11 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--force", action="store_true", help="Replace existing target/lib files that differ")
     result.add_argument("--dry-run", action="store_true", help="Report what would change without writing")
+    result.add_argument(
+        "--skip-target",
+        action="store_true",
+        help="Do not insert TARGET lines (the plugin declares targets itself, e.g. from a directory loop)",
+    )
     return result
 
 
@@ -39,6 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tuple(arguments.reserved_manifest),
             arguments.force,
             arguments.dry_run,
+            arguments.skip_target,
         )
     except (MergeError, OSError, ValueError, KeyError) as error:
         print(f"[ERROR] {error}", file=sys.stderr)

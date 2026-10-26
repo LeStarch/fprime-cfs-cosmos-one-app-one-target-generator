@@ -54,6 +54,29 @@ id = identify(tlm, target, buf)
 puts "identify channel -> #{id ? id.packet_name : 'nil'} value=#{id && id.read('CommandsDispatched')}"
 raise 'channel not identified' unless id && id.packet_name.upcase == 'CFSCORE.CMDDISP.COMMANDSDISPATCHED'
 
+# --- multi-record TlmChan packet through the READ splitter (two channels in one CCSDS packet)
+if defined?(OpenC3::ProtocolFprimeChannelSplitter)
+  OpenC3::ProtocolFprimeChannelSplitter.telemetry_source = -> { tlm }
+  splitter = OpenC3::ProtocolFprimeChannelSplitter.new(false)
+  errors = tlm.packet(target, 'CfsCore.cmdDisp.CommandErrors')
+  err_id = errors.get_item('FPRIME_CHANNEL_ID').id_value
+  rec1 = [chan_id, 2, 0, 1000, 500, 77].pack('NnCNNN')
+  rec2 = [err_id, 2, 0, 1001, 501, 5].pack('NnCNNN')
+  buf = hdr + [1].pack('n') + rec1 + rec2
+  buf[4, 2] = [buf.bytesize - 7].pack('n')
+  first, = splitter.read_data(buf)
+  second, = splitter.read_data('')
+  third, = splitter.read_data('')
+  raise 'splitter did not emit two records' unless first.is_a?(String) && second.is_a?(String) && third == :STOP
+  a = identify(tlm, target, first); b = identify(tlm, target, second)
+  puts "splitter -> #{a.packet_name}=#{a.read('CommandsDispatched')} #{b.packet_name}=#{b.read('CommandErrors')}"
+  raise 'split records wrong' unless a.read('CommandsDispatched') == 77 && b.read('CommandErrors') == 5
+  raise 'split record length wrong' unless first.bytesize == chan.defined_length && second.bytesize == errors.defined_length
+  packets_hdr = [0x0820, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
+  passthrough, = splitter.read_data(packets_hdr + [32, 1].pack('nn') + ("\0" * 40))
+  raise 'non-channel packet must pass through' unless passthrough.bytesize == packets_hdr.bytesize + 44
+end
+
 # --- command: NO_OP_STRING then checksum protocol
 pkt = cmd.build_cmd(target, 'CfsCore.cmdDisp.CMD_NO_OP_STRING', { 'arg1' => 'hello' })
 proto = OpenC3::ProtocolCcsdsChecksumCompat.new
