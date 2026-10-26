@@ -120,3 +120,26 @@ def test_dry_run_writes_nothing(two_bundles, plugin):
     assert not (plugin / "targets/APP_A").exists()
     assert len(report.copied) == 5
     assert any("MAP_TARGET" in line for line in report.plugin_additions)
+
+
+def test_manifest_paths_are_confined_to_the_bundle(two_bundles, plugin):
+    first, _second = two_bundles
+    manifest = json.loads((first / "manifest.json").read_text())
+    manifest["shared_files"] = ["lib/../../etc/passwd"]
+    (first / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(merge.MergeError, match="unexpected file"):
+        merge.merge(plugin, [first])
+    manifest["shared_files"] = ["targets/TO"]
+    (first / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(merge.MergeError, match="unexpected file"):
+        merge.merge(plugin, [first])
+
+
+def test_crlf_plugin_keeps_line_endings(two_bundles, plugin):
+    first, _second = two_bundles
+    (plugin / "plugin.txt").write_bytes(PLUGIN.replace("\n", "\r\n").encode())
+    merge.merge(plugin, [first])
+    data = (plugin / "plugin.txt").read_bytes()
+    assert b"\r\n" in data
+    assert data.count(b"\n") == data.count(b"\r\n")
+    assert b"MAP_TARGET <%= fprime_app_a_target_name %>\r\n" in data

@@ -53,6 +53,21 @@ class MergeReport:
         return "\n".join(lines)
 
 
+def _bundle_files(manifest: dict, directory: Path) -> list[str]:
+    """Manifest-listed files, restricted to the bundle's own targets/<T> and lib/*.rb"""
+    target = manifest.get("target", "")
+    files = list(manifest.get("target_files", [])) + list(manifest.get("shared_files", []))
+    for relative in files:
+        parts = Path(relative).parts
+        in_target = parts == ("targets", target)
+        in_lib = len(parts) == 2 and parts[0] == "lib" and parts[1].endswith(".rb")
+        if Path(relative).is_absolute() or ".." in parts or not (in_target or in_lib):
+            raise MergeError(f"{directory}: manifest lists unexpected file {relative!r}")
+        if not (directory / relative).exists():
+            raise MergeError(f"{directory}: manifest lists missing file {relative}")
+    return files
+
+
 def load_bundle(directory: Path) -> Bundle:
     directory = Path(directory)
     manifest_path = directory / MANIFEST_FILE
@@ -61,6 +76,9 @@ def load_bundle(directory: Path) -> Bundle:
         if not required.exists():
             raise MergeError(f"{directory}: not a generated bundle, missing {required.name}")
     manifest = json.loads(manifest_path.read_text())
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", str(manifest.get("target", ""))):
+        raise MergeError(f"{directory}: manifest target name {manifest.get('target')!r} is invalid")
+    _bundle_files(manifest, directory)
     plugin_lines: list[str] = []
     interface_lines: list[str] = []
     for line in fragment_path.read_text().splitlines():
@@ -113,7 +131,10 @@ def select_interface(lines: list[str], name: str | None) -> int:
 
 
 def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None) -> tuple[str, list[str], str]:
-    lines = text.splitlines()
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.replace("\r\n", "\n").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     start = select_interface(lines, interface)
     interface_name = INTERFACE_LINE.match(lines[start]).group("name")
     end = _block_end(lines, start)
@@ -143,7 +164,7 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None) -
     ]
     insert_at = variable_indices[-1] + 1 if variable_indices else 0
     lines[insert_at:insert_at] = plugin_additions
-    return "\n".join(lines) + "\n", additions + plugin_additions, interface_name
+    return newline.join(lines) + newline, additions + plugin_additions, interface_name
 
 
 def _same_tree(source: Path, destination: Path) -> bool:
@@ -188,10 +209,6 @@ def merge(
     if not bundles:
         raise MergeError("at least one bundle is required")
     check_collisions(bundles, reserved_manifests)
-    for bundle in bundles:
-        for relative in bundle.manifest.get("target_files", []) + bundle.manifest.get("shared_files", []):
-            if not (bundle.directory / relative).exists():
-                raise MergeError(f"{bundle.directory}: manifest lists missing file {relative}")
 
     new_text, additions, interface_name = merge_plugin_text(plugin_file.read_text(), bundles, interface)
     report = MergeReport(plugin, interface_name, plugin_additions=additions)
