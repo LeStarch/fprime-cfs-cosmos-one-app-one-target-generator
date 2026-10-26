@@ -11,7 +11,7 @@ def test_write_bundle_is_standalone(dictionary, tmp_path):
     artifacts = generator.write_bundle(app, tmp_path, "AP", channelized=True)
     root = artifacts.directory
     assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()) == [
-        "lib/fprime_msg_id.rb",
+        "lib/fprime_ap_msg_id.rb",
         "lib/protocol_ccsds_checksum_compat.rb",
         "manifest.json",
         "plugin.fragment.txt",

@@ -16,6 +16,7 @@ dev = ["pytest", "ruff"]
 
 [project.scripts]
 fprime-to-cfs-cosmos-target = "fprime_cfs_cosmos_generator.cli:main"
+fprime-cfs-cosmos-merge = "fprime_cfs_cosmos_generator.merge_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -30,6 +30,23 @@ cross-application MID collision checks using the manifests. The shared write
 protocol updates the CCSDS length from the serialized command and writes the
 cFS XOR checksum through either `SEC_CRC` or `CCSDS_CHECKSUM`.
 
+## Merge bundles into an existing plugin
+
+```bash
+fprime-cfs-cosmos-merge --plugin path/to/cfs-cosmos-plugin \
+  build/generated/FPRIME_APP build/generated/OTHER_APP \
+  [--interface CFS_INTF] [--reserved-manifest ordinary_cfs_mids.json] [--dry-run] [--force]
+```
+
+For each bundle the merge copies `targets/<APP>/` and `lib/fprime_<app>_msg_id.rb`, places the shared
+runtime files once (they must be byte-identical across bundles), appends the `VARIABLE` lines after the
+plugin's existing `VARIABLE`s, and appends `MAP_TARGET <%= ... %>` plus a single
+`PROTOCOL WRITE ProtocolCcsdsChecksumCompat` to the end of the chosen `INTERFACE` block. The interface is
+the only `INTERFACE` in `plugin.txt` or the one selected by `--interface`. Nothing else in the plugin is
+touched; ordinary cFS targets stay as they are. Target names and message IDs are checked for collisions
+across all bundles and `--reserved-manifest` files before anything is written. Re-running the merge is a
+no-op; an existing target with different content is an error unless `--force` is given.
+
 ## Telemetry modes
 
 - **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the

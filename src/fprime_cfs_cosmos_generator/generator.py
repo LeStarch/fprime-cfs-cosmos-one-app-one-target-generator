@@ -19,7 +19,8 @@ SUBPACKETIZER = "fprime_subpacketizer.rb"
 CHECKSUM_PROTOCOL = "protocol_ccsds_checksum_compat.rb"
 COMMANDS_FILE = "fprime_cmd.txt"
 TELEMETRY_FILE = "fprime_tlm.txt"
-MESSAGE_IDS_FILE = "fprime_msg_id.rb"
+MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
+MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
 
 
 class GeneratorError(Exception):
@@ -37,6 +38,11 @@ def _ruby_string(text: str) -> str:
     return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
+def message_ids_file(target_name: str) -> str:
+    """Per-target Ruby file so several F Prime apps can share one plugin lib directory"""
+    return MESSAGE_IDS_FILE.format(target=target_name.lower())
+
+
 def _preamble(target_name: str, identifiers: dict[str, str]) -> list[str]:
     lines = [
         "<%",
@@ -44,11 +50,12 @@ def _preamble(target_name: str, identifiers: dict[str, str]) -> list[str]:
         "  require 'cfs_ccsds'",
         "  require 'fsw_msg_id'",
         "  require 'fsw_config_param'",
-        "  require 'fprime_msg_id'",
+        f"  require '{message_ids_file(target_name)[:-3]}'",
         "",
         f"  @APP_PREFIX_STR = {_ruby_string(target_name)}",
     ]
-    lines.extend(f"  @{name} = FprimeMsgId::{constant}" for name, constant in identifiers.items())
+    module = MESSAGE_IDS_MODULE.format(target=target_name)
+    lines.extend(f"  @{name} = {module}::{constant}" for name, constant in identifiers.items())
     lines.extend(["", "%>", ""])
     return lines
 
@@ -156,10 +163,10 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
     return "\n\n".join(blocks) + "\n"
 
 
-def emit_message_ids(app: cfs.CfsApp, channelized: bool = True) -> str:
+def emit_message_ids(app: cfs.CfsApp, target_name: str, channelized: bool = True) -> str:
     lines = [
-        "# Generated F Prime cFS message identifiers. Do not edit.",
-        "module FprimeMsgId",
+        f"# Generated F Prime cFS message identifiers for {target_name}. Do not edit.",
+        f"module {MESSAGE_IDS_MODULE.format(target=target_name)}",
         f"  CMD_MID = '{app.command_mid:#06x}'",
         f"  PACKETS_TLM_MID = '{app.packets_mid:#06x}'",
     ]
@@ -223,6 +230,7 @@ def _manifest(
         "telemetry_mode": "subpacketizer" if subpacketizer else "flat",
         "minimum_cosmos_version": "6.10.0" if subpacketizer else "6.0.0",
         "message_ids": {name: f"{mid:#06x}" for name, mid in mids.items()},
+        "target_files": [f"targets/{target_name}", f"lib/{message_ids_file(target_name)}"],
         "shared_files": [f"lib/{name}" for name in _runtime_files(subpacketizer)],
         "required_helpers": ["global_defs", "cfs_ccsds", "fsw_msg_id", "fsw_config_param"],
     }
@@ -274,7 +282,7 @@ def write_bundle(
     (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, channelized, subpacketizer))
     lib = output / "lib"
     _copy_runtime(lib, subpacketizer)
-    (lib / MESSAGE_IDS_FILE).write_text(emit_message_ids(app, channelized))
+    (lib / message_ids_file(target_name)).write_text(emit_message_ids(app, target_name, channelized))
     (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name))
     manifest_path = output / "manifest.json"
     manifest_path.write_text(
