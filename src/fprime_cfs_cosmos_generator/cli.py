@@ -26,6 +26,11 @@ def parser() -> argparse.ArgumentParser:
         help="Manifest from another generated app or ordinary cFS ID inventory; repeat to reject collisions",
     )
     result.add_argument("--no-channelized", action="store_true", help="Do not generate channelized telemetry")
+    result.add_argument(
+        "--subpacketizer",
+        action="store_true",
+        help="Emit SUBPACKETIZER/SUBPACKET telemetry (COSMOS 6.10+); default is flat packets for every COSMOS 6.x",
+    )
     return result
 
 
@@ -39,6 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.packet_set_name,
             not arguments.no_channelized,
             tuple(arguments.reserved_manifest),
+            arguments.subpacketizer,
         )
     except (DictionaryError, GeneratorError, OSError, ValueError) as error:
         print(f"[ERROR] {error}", file=sys.stderr)

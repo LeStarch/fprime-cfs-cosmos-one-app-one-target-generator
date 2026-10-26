@@ -3,9 +3,7 @@ from pathlib import Path
 import pytest
 from fprime_cosmos.dictionary import FprimeDictionary
 
-DICTIONARY = (
-    Path(__file__).parents[2] / "fprime-cosmos" / "tests" / "data" / "FPrimeDeploymentTopologyDictionary.json"
-)
+DICTIONARY = Path(__file__).parents[2] / "fprime-cosmos" / "tests" / "data" / "FPrimeDeploymentTopologyDictionary.json"
 
 
 @pytest.fixture

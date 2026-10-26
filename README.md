@@ -30,6 +30,18 @@ cross-application MID collision checks using the manifests. The shared write
 protocol updates the CCSDS length from the serialized command and writes the
 cFS XOR checksum through either `SEC_CRC` or `CCSDS_CHECKSUM`.
 
+## Telemetry modes
+
+- **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the
+  `Ccsds.tlm` header plus `FPRIME_DESCRIPTOR`/`FPRIME_PACKET_ID` (or `FPRIME_CHANNEL_ID`) ID items.
+  Works on every COSMOS 6.x; matches `CfsTlmFramer`, which wraps one F Prime com packet per CCSDS packet.
+- **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
+  F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
+
+`tests/cosmos/run.sh <bundle> <TARGET> [version]` loads a bundle into the real `openc3` gem in Docker
+(6.9.1 by default) using stub `global_defs`/`cfs_ccsds` helpers that reproduce the inline header contract,
+identifies a packet and a channel, builds a command and checks the checksum protocol.
+
 ## Install
 
 ```bash
@@ -38,7 +50,7 @@ pip install git+https://github.com/LeStarch/fprime-cfs-cosmos-one-app-one-target
 
 The dictionary, wire-format, and cFS MID derivation logic comes from
 `fprime-cosmos` (its `cfs` overlay, currently fprime-community/fprime-cosmos
-PR #2). Tested against OpenC3 COSMOS 6.9.1 plugin validation.
+PR #2). Generated bundles load and decode against the OpenC3 6.9.1 gem (`tests/cosmos/run.sh`).
 
 ## Checks
 

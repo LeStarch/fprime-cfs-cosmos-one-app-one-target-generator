@@ -12,7 +12,6 @@ def test_write_bundle_is_standalone(dictionary, tmp_path):
     root = artifacts.directory
     assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()) == [
         "lib/fprime_msg_id.rb",
-        "lib/fprime_subpacketizer.rb",
         "lib/protocol_ccsds_checksum_compat.rb",
         "manifest.json",
         "plugin.fragment.txt",
@@ -33,7 +32,40 @@ def test_exact_ruby_helper_contract(dictionary, tmp_path):
     assert "<%= Ccsds.tlm(@CHANNELS_TLM_MID_STR) %>" in telemetry
     assert "CCSDS_SPARE" not in telemetry
     assert "SPARE_FOR_64_ALIGN" not in telemetry
+    assert "SUBPACKET" not in telemetry
+
+
+def test_flat_telemetry_identifies_each_record_by_mid_descriptor_and_id(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    packet = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> Health ") :].split("\n\n")[0]
+    assert "<%= Ccsds.tlm(@PACKETS_TLM_MID_STR) %>" in packet
+    assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 32 " in packet
+    assert "APPEND_ID_ITEM FPRIME_PACKET_ID 16 UINT 1 " in packet
+    channel = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> CfsCore.cmdDisp.CommandsDispatched ") :]
+    channel = channel.split("\n\n")[0]
+    assert "<%= Ccsds.tlm(@CHANNELS_TLM_MID_STR) %>" in channel
+    assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 1 " in channel
+    assert "APPEND_ID_ITEM FPRIME_CHANNEL_ID " in channel
+    assert "FPRIME_PACKETS" not in telemetry
+    assert "FPRIME_CHANNELS" not in telemetry
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["telemetry_mode"] == "flat"
+    assert manifest["shared_files"] == ["lib/protocol_ccsds_checksum_compat.rb"]
+
+
+def test_subpacketizer_mode_for_cosmos_6_10(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    root = generator.write_bundle(app, tmp_path, "AP", subpacketizer=True).directory
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    assert "  SUBPACKETIZER fprime_subpacketizer.rb" in telemetry
     assert "  SUBPACKET\n  SUBPACKET" not in telemetry
+    assert telemetry.count("<%= Ccsds.tlm(") == 2
+    assert (root / "lib/fprime_subpacketizer.rb").exists()
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["telemetry_mode"] == "subpacketizer"
+    assert manifest["minimum_cosmos_version"] == "6.10.0"
 
 
 def test_manifest_and_plugin_fragment(dictionary, tmp_path):
@@ -85,8 +117,6 @@ def test_reserved_manifest_rejects_target_and_mid_collisions(dictionary, tmp_pat
 
 
 def test_checksum_runtime_updates_length_and_both_field_names():
-    source = (
-        generator.RUNTIME / generator.CHECKSUM_PROTOCOL
-    ).read_text()
+    source = (generator.RUNTIME / generator.CHECKSUM_PROTOCOL).read_text()
     assert "['SEC_CRC', 'CCSDS_CHECKSUM']" in source
     assert "packet.buffer.bytesize - 7" in source
