@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
-from importlib import resources
 from pathlib import Path
 
 from fprime_cosmos.dictionary import DictionaryError
@@ -16,9 +15,6 @@ from .generator import GeneratorError, build_bundle
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Generate one standalone cFS COSMOS target for an F Prime app")
     result.add_argument("--dictionary", required=True, type=Path, help="F Prime JSON topology dictionary")
-    result.add_argument(
-        "--cmake-dir", action="store_true", help="Print the directory of FPrimeCfsCosmos.cmake and exit"
-    )
     result.add_argument("--output", "-o", required=True, type=Path, help="Parent directory for the generated bundle")
     result.add_argument("--target-name", help="COSMOS target name; defaults to the deployment name in uppercase")
     result.add_argument("--packet-set-name", help="Packet set to use when the dictionary defines more than one")
@@ -38,16 +34,9 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def cmake_dir() -> Path:
-    return Path(str(resources.files("fprime_cfs_cosmos_generator") / "cmake"))
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
-    if list(argv) == ["--cmake-dir"]:
-        print(cmake_dir())
-        return 0
     arguments = parser().parse_args(argv)
     try:
         artifacts = build_bundle(

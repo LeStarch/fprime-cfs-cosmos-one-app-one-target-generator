@@ -22,7 +22,7 @@ fprime-cfs-cosmos-merge = "fprime_cfs_cosmos_generator.merge_cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fprime_cfs_cosmos_generator = ["runtime/*.rb", "cmake/*.cmake"]
+fprime_cfs_cosmos_generator = ["runtime/*.rb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

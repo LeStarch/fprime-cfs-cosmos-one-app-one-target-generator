@@ -59,31 +59,41 @@ ever replaces content this tool generated. All conflicts are detected before any
   `CCSDS_LENGTH` from the bytes actually serialized before computing the checksum, so variable-length
   strings go out with the correct length.
 
-## CMake integration (F Prime build)
+## CMake integration (F Prime autocoder)
+
+This repository is an F Prime library: add it to `library_locations` in `settings.ini` (or
+`-DFPRIME_LIBRARY_LOCATIONS=...`). `library.cmake` registers the `cfs_cosmos` autocoder
+(`cmake/autocoder/cfs_cosmos.cmake`) and provides `fprime_cfs_cosmos_merge()`.
+
+The autocoder consumes an empty flag file `<Deployment>.cfs-cosmos` listed in the `AUTOCODER_INPUTS` of the
+module whose fpp autocoding produces `<Deployment>TopologyDictionary.json` (the `<Deployment>_Top` module):
 
 ```cmake
-# any CMakeLists.txt processed after F Prime is loaded, e.g. the cFS app that hosts the F Prime deployment
-execute_process(COMMAND fprime-to-cfs-cosmos-target --cmake-dir
-                OUTPUT_VARIABLE FPRIME_CFS_COSMOS_CMAKE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
-include("${FPRIME_CFS_COSMOS_CMAKE_DIR}/FPrimeCfsCosmos.cmake")
+register_fprime_module(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/topology.fpp"
+        "${CMAKE_CURRENT_LIST_DIR}/FPrimeDeployment.cfs-cosmos"
+    ...
+)
+```
+
+It runs after fpp in the same autocoder set, reads the dictionary fpp declared and writes the bundle to
+`${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>/<TARGET>/` through a `<Deployment>_cfs_cosmos` target the module
+depends on (`cfs_cosmos` builds them all). Extra generator flags: cache variables `FPRIME_CFS_COSMOS_ARGS` and
+`FPRIME_CFS_COSMOS_ARGS_<Deployment>`, e.g. `-DFPRIME_CFS_COSMOS_ARGS=--no-channelized`.
+
+```cmake
 fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin"
                         INTERFACE CFS_INTF            # optional, as --interface
-                        DEPLOYMENTS FPrimeDeployment  # optional, default: every deployment
+                        DEPLOYMENTS FPrimeDeployment  # optional, default: every flag file
                         # SKIP_TARGET FORCE DRY_RUN ALL  RESERVED_MANIFEST a.json b.json
                         )
 ```
 
-After the whole tree is processed, every module that autocodes a `<Deployment>TopologyDictionary.json`
-(a deployment, or the `<Deployment>_Top` module of an F Prime app hosted in cFS) gets a
-`<Deployment>_cfs_cosmos` target that its module depends on, so a normal build writes the bundle to
-`${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>/<TARGET>/`; `cfs_cosmos` builds them all.
-`fprime_cfs_cosmos_merge` adds `cfs_cosmos_merge` (or `NAME`) which runs `fprime-cfs-cosmos-merge` on
-those bundles; build it with `make cfs_cosmos_merge` / `fprime-util build --target cfs_cosmos_merge`, or
-pass `ALL` to make it part of the default build. Extra generator flags: cache variables
-`FPRIME_CFS_COSMOS_ARGS` (all deployments) and `FPRIME_CFS_COSMOS_ARGS_<Deployment>`, e.g.
-`-DFPRIME_CFS_COSMOS_ARGS=--no-channelized`. Verified on fprime_cfs_reference's cFS mission build
-(`FPrimeDeployment` and `GdsBridge` discovered; both use APID 0x000 there, so merge them separately or
-give one a different `ComCfg.Apid`).
+adds `cfs_cosmos_merge` (or `NAME`), which runs `fprime-cfs-cosmos-merge` on those bundles; build it with
+`make cfs_cosmos_merge` / `fprime-util build --target cfs_cosmos_merge`, or pass `ALL`. Verified on the
+fprime_cfs_reference cFS mission build (`FPrimeDeployment` and `GdsBridge` both use APID 0x000 there, so merge
+them separately or give one a different `ComCfg.Apid`).
 
 ## Telemetry modes
 
