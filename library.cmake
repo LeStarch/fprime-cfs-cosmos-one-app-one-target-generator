@@ -28,11 +28,13 @@ if (_FPRIME_CFS_COSMOS_REGISTERED)
 elseif (NOT _FPRIME_CFS_COSMOS_DETECTION_STARTED)
     register_fprime_build_autocoder("${FPRIME_CFS_COSMOS_AUTOCODER}" FALSE)
 else()
-    message(WARNING "[cfs_cosmos] autocoder not registered; cfs-cosmos-flag files will not be handled. Add\n"
-                    "    set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)\n"
-                    "    find_package(FPrime ...)\n"
-                    "    register_fprime_build_autocoder(autocoder/cfs_cosmos FALSE)\n"
-                    "    fprime_setup_included_code()\n"
-                    "to the project CMakeLists.txt that loads F Prime.")
+    message(STATUS "[cfs_cosmos] autocoder not globally registered; cfs-cosmos-flag files are handled only by explicit\n"
+                   "    run_ac_set(<topology module> autocoder/cfs_cosmos)\n"
+                   "calls (guard with `if (NOT FPRIME_IS_SUB_BUILD)`). To register it for every module instead, add\n"
+                   "    set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)\n"
+                   "    find_package(FPrime ...)\n"
+                   "    register_fprime_build_autocoder(autocoder/cfs_cosmos FALSE)\n"
+                   "    fprime_setup_included_code()\n"
+                   "to the project CMakeLists.txt that loads F Prime.")
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/FPrimeCfsCosmos.cmake")

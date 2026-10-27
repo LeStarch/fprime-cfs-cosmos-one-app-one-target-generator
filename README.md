@@ -77,6 +77,20 @@ F Prime includes `library.cmake` only after the framework modules, when `registe
 refuses new registrations (tracked in https://github.com/nasa/fprime/issues/6272), so the manifest cannot register
 the autocoder itself; it provides `fprime_cfs_cosmos_merge()` and warns when the autocoder is missing.
 
+Alternatively, skip the global registration and call the autocoder explicitly from the topology module's
+CMakeLists.txt, after `register_fprime_module` (which has already run fpp for the module, so the dictionary is
+known). `run_ac_set` is not valid in F Prime's sub-builds, hence the guard:
+
+```cmake
+register_fprime_module(AUTOCODER_INPUTS ... "${CMAKE_CURRENT_LIST_DIR}/cfs-cosmos-flag" ...)
+if (NOT FPRIME_IS_SUB_BUILD)
+    run_ac_set(FPrimeDeployment_Top autocoder/cfs_cosmos)  # the module registered above
+endif()
+```
+
+Both routes need the repository on `library_locations` (its `cmake/` directory is then on `CMAKE_MODULE_PATH`,
+which is what makes the short `autocoder/cfs_cosmos` form resolve) and produce the same targets.
+
 The autocoder consumes an empty flag file named `cfs-cosmos-flag` listed in the `AUTOCODER_INPUTS` of the
 module whose fpp autocoding produces `<Deployment>TopologyDictionary.json` (the `<Deployment>_Top` module):
 
