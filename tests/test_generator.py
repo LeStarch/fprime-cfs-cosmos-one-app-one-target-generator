@@ -1,9 +1,8 @@
 import json
 
 import pytest
-from fprime_cosmos import cfs
 
-from fprime_cfs_cosmos_generator import generator
+from fprime_cfs_cosmos_generator import cfs, generator
 
 
 def test_write_bundle_is_standalone(dictionary, tmp_path):

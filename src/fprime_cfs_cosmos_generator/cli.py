@@ -7,8 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from fprime_cosmos.dictionary import DictionaryError
-
+from .dictionary import DictionaryError
 from .generator import GeneratorError, build_bundle
 
 

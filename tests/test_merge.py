@@ -2,9 +2,8 @@ import json
 import textwrap
 
 import pytest
-from fprime_cosmos import cfs
 
-from fprime_cfs_cosmos_generator import generator, merge
+from fprime_cfs_cosmos_generator import cfs, generator, merge
 
 PLUGIN = textwrap.dedent(
     """\

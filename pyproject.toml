@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Generate one standalone cFS COSMOS target bundle for an F Prime application"
 requires-python = ">=3.10"
 dependencies = [
-    "fprime-cosmos @ git+https://github.com/fprime-community/fprime-cosmos.git@59dd8ab33d9a4306592b8853bd5c4cb519f2689e",
+    "fprime-gds>=4.2.0",
 ]
 
 [project.optional-dependencies]

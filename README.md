@@ -128,9 +128,10 @@ identifies a packet and a channel, builds a command and checks the checksum prot
 pip install git+https://github.com/LeStarch/fprime-cfs-cosmos-one-app-one-target-generator.git
 ```
 
-The dictionary, wire-format, and cFS MID derivation logic comes from
-`fprime-cosmos` (its `cfs` overlay, currently fprime-community/fprime-cosmos
-PR #2). Generated bundles load and decode against the OpenC3 6.9.1 gem (`tests/cosmos/run.sh`).
+The dictionary is read with the fprime-gds JSON loaders (`fprime-gds>=4.2.0`, the first release with
+`Dictionaries.load_dictionaries_into_config`); the loose bound resolves against whatever `fprime-gds` an F Prime
+project's `requirements.txt` already pins. One dictionary is loaded per invocation. Generated bundles load and
+decode against the OpenC3 6.9.1 gem (`tests/cosmos/run.sh`).
 
 ## Checks
 

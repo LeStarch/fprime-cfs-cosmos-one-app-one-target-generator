@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from fprime_cosmos import cfs, emit
-from fprime_cosmos.dictionary import FprimeDictionary
+from . import cfs, emit
+from .dictionary import FprimeDictionary
 
 RUNTIME = resources.files("fprime_cfs_cosmos_generator") / "runtime"
 TARGET_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")

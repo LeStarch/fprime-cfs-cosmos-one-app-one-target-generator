@@ -1,7 +1,8 @@
 from pathlib import Path
 
 import pytest
-from fprime_cosmos.dictionary import FprimeDictionary
+
+from fprime_cfs_cosmos_generator.dictionary import FprimeDictionary
 
 DICTIONARY = Path(__file__).parent / "data" / "FPrimeDeploymentTopologyDictionary.json"
 
