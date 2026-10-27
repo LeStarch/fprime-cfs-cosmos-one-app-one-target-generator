@@ -61,9 +61,22 @@ ever replaces content this tool generated. All conflicts are detected before any
 
 ## CMake integration (F Prime autocoder)
 
-This repository is an F Prime library: add it to `library_locations` in `settings.ini` (fprime-util projects) or to
-the `FPRIME_LIBRARY_LOCATIONS` CMake variable. A cFS mission has no `settings.ini`; put the path in the mission
-defs, which every app's configure reads:
+This repository is an F Prime library and a self-registering cFS module. In a cFS mission, clone it under `libs/`
+and list it in the mission app list; its `arch_build.cmake` (included by cFS for every listed module before any
+module directory is added) puts the repository on `FPRIME_LIBRARY_LOCATIONS`, and its placeholder `CMakeLists.txt`
+builds nothing:
+
+```cmake
+# <mission>_defs/targets.cmake  (directory name must match the list entry: libs/fprime_cfs_cosmos)
+list(APPEND MISSION_GLOBAL_APPLIST fprime fprime_cfs fprime_cfs_cosmos fprime_app ...)
+```
+
+Verified on fprime_cfs_reference with a fresh `make prep`: `[cfs_cosmos] registered ... on FPRIME_LIBRARY_LOCATIONS`,
+`[LIBRARY] Including library fprime_cfs_cosmos`, and `FPrimeDeployment_cfs_cosmos` builds.
+
+fprime-util projects add it to `library_locations` in `settings.ini` instead. Any other build can set the
+`FPRIME_LIBRARY_LOCATIONS` CMake variable itself, for a cFS mission in the mission defs, which every app's configure
+reads:
 
 ```cmake
 # <mission>_defs/arch_build_custom.cmake
