@@ -79,6 +79,23 @@ def _bundle_files(manifest: dict, directory: Path) -> list[str]:
     return files
 
 
+def _expand_bundle_dirs(paths: list[Path]) -> list[Path]:
+    """A bundle directory, or a directory that holds bundle directories (e.g. a build's cfs-cosmos/<DEPLOYMENT>)"""
+    result: list[Path] = []
+    for path in paths:
+        path = Path(path)
+        if (path / MANIFEST_FILE).is_file():
+            result.append(path)
+            continue
+        children = (
+            sorted(child for child in path.iterdir() if (child / MANIFEST_FILE).is_file()) if path.is_dir() else []
+        )
+        if not children:
+            raise MergeError(f"{path}: not a generated bundle and contains none")
+        result.extend(children)
+    return result
+
+
 def load_bundle(directory: Path) -> Bundle:
     directory = Path(directory)
     manifest_path = directory / MANIFEST_FILE
@@ -259,7 +276,7 @@ def merge(
     plugin_file = plugin / PLUGIN_FILE
     if not plugin_file.is_file():
         raise MergeError(f"{plugin}: no {PLUGIN_FILE}; expected an existing cFS COSMOS plugin source tree")
-    bundles = [load_bundle(path) for path in bundle_dirs]
+    bundles = [load_bundle(path) for path in _expand_bundle_dirs(bundle_dirs)]
     if not bundles:
         raise MergeError("at least one bundle is required")
     check_collisions(bundles, reserved_manifests)

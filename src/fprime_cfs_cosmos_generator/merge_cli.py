@@ -15,7 +15,12 @@ def parser() -> argparse.ArgumentParser:
         description="Merge generated F Prime app bundles into an existing cFS COSMOS plugin"
     )
     result.add_argument("--plugin", required=True, type=Path, help="Existing plugin source tree containing plugin.txt")
-    result.add_argument("bundles", nargs="+", type=Path, help="Generated bundle directories (each has manifest.json)")
+    result.add_argument(
+        "bundles",
+        nargs="+",
+        type=Path,
+        help="Generated bundle directories (each has manifest.json) or directories containing them",
+    )
     result.add_argument("--interface", help="Name (or unique substring) of the INTERFACE that carries cFS UDP traffic")
     result.add_argument(
         "--reserved-manifest",
@@ -51,3 +56,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print(("DRY RUN\n" if arguments.dry_run else "") + report.summary())
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

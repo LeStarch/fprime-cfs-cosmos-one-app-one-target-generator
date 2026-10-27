@@ -59,6 +59,32 @@ ever replaces content this tool generated. All conflicts are detected before any
   `CCSDS_LENGTH` from the bytes actually serialized before computing the checksum, so variable-length
   strings go out with the correct length.
 
+## CMake integration (F Prime build)
+
+```cmake
+# any CMakeLists.txt processed after F Prime is loaded, e.g. the cFS app that hosts the F Prime deployment
+execute_process(COMMAND fprime-to-cfs-cosmos-target --cmake-dir
+                OUTPUT_VARIABLE FPRIME_CFS_COSMOS_CMAKE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+include("${FPRIME_CFS_COSMOS_CMAKE_DIR}/FPrimeCfsCosmos.cmake")
+fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin"
+                        INTERFACE CFS_INTF            # optional, as --interface
+                        DEPLOYMENTS FPrimeDeployment  # optional, default: every deployment
+                        # SKIP_TARGET FORCE DRY_RUN ALL  RESERVED_MANIFEST a.json b.json
+                        )
+```
+
+After the whole tree is processed, every module that autocodes a `<Deployment>TopologyDictionary.json`
+(a deployment, or the `<Deployment>_Top` module of an F Prime app hosted in cFS) gets a
+`<Deployment>_cfs_cosmos` target that its module depends on, so a normal build writes the bundle to
+`${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>/<TARGET>/`; `cfs_cosmos` builds them all.
+`fprime_cfs_cosmos_merge` adds `cfs_cosmos_merge` (or `NAME`) which runs `fprime-cfs-cosmos-merge` on
+those bundles; build it with `make cfs_cosmos_merge` / `fprime-util build --target cfs_cosmos_merge`, or
+pass `ALL` to make it part of the default build. Extra generator flags: cache variables
+`FPRIME_CFS_COSMOS_ARGS` (all deployments) and `FPRIME_CFS_COSMOS_ARGS_<Deployment>`, e.g.
+`-DFPRIME_CFS_COSMOS_ARGS=--no-channelized`. Verified on fprime_cfs_reference's cFS mission build
+(`FPrimeDeployment` and `GdsBridge` discovered; both use APID 0x000 there, so merge them separately or
+give one a different `ComCfg.Apid`).
+
 ## Telemetry modes
 
 - **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the
