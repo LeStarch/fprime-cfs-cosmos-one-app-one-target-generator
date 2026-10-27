@@ -74,6 +74,19 @@ list(APPEND MISSION_GLOBAL_APPLIST fprime fprime_cfs fprime_cfs_cosmos fprime_ap
 Verified on fprime_cfs_reference with a fresh `make prep`: `[cfs_cosmos] registered ... on FPRIME_LIBRARY_LOCATIONS`,
 `[LIBRARY] Including library fprime_cfs_cosmos`, and `FPrimeDeployment_cfs_cosmos` builds.
 
+If an earlier module's `arch_build.cmake` has already loaded F Prime with the framework code off, e.g. in
+`libs/fprime_cfs/arch_build.cmake`:
+
+```cmake
+set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)
+find_package(FPrime REQUIRED PATHS "${fprime_MISSION_DIR}")
+```
+
+then this repository's `arch_build.cmake` also registers the `cfs_cosmos` autocoder globally (and includes
+`FPrimeCfsCosmos.cmake` for `fprime_cfs_cosmos_merge()`), so the flag file alone is enough — no `run_ac_set` and no
+edits to the project CMakeLists. Verified on fprime_cfs_reference: the later `find_package(FPrime)` in
+`libs/fprime_cfs/CMakeLists.txt` re-enters harmlessly and `FPrimeDeployment_cfs_cosmos` builds from the flag file.
+
 fprime-util projects add it to `library_locations` in `settings.ini` instead. Any other build can set the
 `FPRIME_LIBRARY_LOCATIONS` CMake variable itself, for a cFS mission in the mission defs, which every app's configure
 reads:
