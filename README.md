@@ -62,8 +62,20 @@ ever replaces content this tool generated. All conflicts are detected before any
 ## CMake integration (F Prime autocoder)
 
 This repository is an F Prime library: add it to `library_locations` in `settings.ini` (or
-`-DFPRIME_LIBRARY_LOCATIONS=...`). `library.cmake` registers the `cfs_cosmos` autocoder
-(`cmake/autocoder/cfs_cosmos.cmake`) and provides `fprime_cfs_cosmos_merge()`.
+`-DFPRIME_LIBRARY_LOCATIONS=...`) and register the `cfs_cosmos` autocoder (`cmake/autocoder/cfs_cosmos.cmake`)
+from the CMakeLists.txt that loads F Prime, before the framework code is included:
+
+```cmake
+set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)
+find_package(FPrime REQUIRED PATHS "${FPRIME_FRAMEWORK_PATH}")
+register_fprime_build_autocoder(autocoder/cfs_cosmos FALSE)
+fprime_setup_included_code()
+```
+
+(In a cFS mission this is the first F Prime project in the build, e.g. `libs/fprime_cfs/CMakeLists.txt`.)
+F Prime includes `library.cmake` only after the framework modules, when `register_fprime_build_autocoder`
+refuses new registrations (tracked in https://github.com/nasa/fprime/issues/6272), so the manifest cannot register
+the autocoder itself; it provides `fprime_cfs_cosmos_merge()` and warns when the autocoder is missing.
 
 The autocoder consumes an empty flag file named `cfs-cosmos-flag` listed in the `AUTOCODER_INPUTS` of the
 module whose fpp autocoding produces `<Deployment>TopologyDictionary.json` (the `<Deployment>_Top` module):
