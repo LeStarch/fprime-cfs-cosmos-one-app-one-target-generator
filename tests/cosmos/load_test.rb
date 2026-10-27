@@ -89,6 +89,19 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
     puts "splitter string case -> #{decoded.map(&:packet_name).join(', ')} = #{values.inspect}"
     raise 'string channel split wrong' unless values.sort_by(&:to_s) == ['77', 'v4.3.0'].sort_by(&:to_s).map { |v| v == '77' ? 77 : v }
   end
+  # struct channel with a string in the middle (enum, string, U8 status) followed by a scalar channel
+  custom = tlm.packet(target, 'CfsCore.version.CustomVersion01')
+  custom_id = custom.get_item('FPRIME_CHANNEL_ID').id_value
+  rec_c = [custom_id, 2, 0, 1003, 503, 7, 5].pack('NnCNNNn') + 'v1.2a' + [2].pack('C')
+  buf = hdr + [1].pack('n') + rec_c + rec1
+  buf[4, 2] = [buf.bytesize - 7].pack('n')
+  p1, = splitter.read_data(buf)
+  p2, = splitter.read_data('')
+  rest, = splitter.read_data('')
+  raise 'struct-with-string split failed' unless p1.is_a?(String) && p2.is_a?(String) && rest == :STOP
+  c = identify(tlm, target, p1); d = identify(tlm, target, p2)
+  puts "splitter struct case -> #{c.packet_name} value=#{c.read('CustomVersion01.version_value')} status=#{c.read('CustomVersion01.version_status')}; #{d.packet_name}=#{d.read('CommandsDispatched')}"
+  raise 'struct channel wrong' unless c.read('CustomVersion01.version_value') == 'v1.2a' && c.read('CustomVersion01.version_status') == 2 && d.read('CommandsDispatched') == 77
   packets_hdr = [0x0820, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
   passthrough, = splitter.read_data(packets_hdr + [32, 1].pack('nn') + ("\0" * 40))
   raise 'non-channel packet must pass through' unless passthrough.bytesize == packets_hdr.bytesize + 44

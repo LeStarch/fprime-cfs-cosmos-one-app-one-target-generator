@@ -44,7 +44,7 @@ module OpenC3
         next if item.data_type == :DERIVED || !item.parent_item.nil? || item.bit_offset < 0
 
         bits = if item.variable_bit_size
-                 subpacket.calculate_total_bit_size(item)
+                 subpacket.send(:calculate_total_bit_size, item) # protected in openc3 6.9
                elsif item.array_size
                  item.array_size
                else

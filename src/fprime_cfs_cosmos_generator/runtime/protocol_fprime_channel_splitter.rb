@@ -110,14 +110,18 @@ module OpenC3
       pieces.empty? ? nil : pieces
     end
 
-    # Bytes of a complete channel packet (header + descriptor + record) measured against the channel's items
+    # Bytes of a complete channel packet (header + descriptor + record) measured against the channel's items.
+    # Assigning the buffer to a clone makes COSMOS recalculate the offsets of items that follow a
+    # variable-length (string) item, so structs with a string in the middle measure correctly.
     def record_length(packet, buffer)
-      end_bits = packet.defined_length_bits
-      packet.sorted_items.each do |item|
+      return packet.defined_length if packet.fixed_size
+      probe = packet.clone
+      probe.buffer = buffer
+      end_bits = probe.defined_length_bits
+      probe.sorted_items.each do |item|
         next if item.data_type == :DERIVED || item.bit_offset < 0
         bits = if item.variable_bit_size
-                 count = packet.read(item.variable_bit_size['length_item_name'], :RAW, buffer)
-                 count * item.variable_bit_size['length_bits_per_count'] + item.variable_bit_size['length_value_bit_offset']
+                 probe.send(:calculate_total_bit_size, item) # protected in openc3 6.9
                elsif item.array_size
                  item.array_size
                else
