@@ -65,14 +65,14 @@ This repository is an F Prime library: add it to `library_locations` in `setting
 `-DFPRIME_LIBRARY_LOCATIONS=...`). `library.cmake` registers the `cfs_cosmos` autocoder
 (`cmake/autocoder/cfs_cosmos.cmake`) and provides `fprime_cfs_cosmos_merge()`.
 
-The autocoder consumes an empty flag file `<Deployment>.cfs-cosmos` listed in the `AUTOCODER_INPUTS` of the
+The autocoder consumes an empty flag file named `cfs-cosmos-flag` listed in the `AUTOCODER_INPUTS` of the
 module whose fpp autocoding produces `<Deployment>TopologyDictionary.json` (the `<Deployment>_Top` module):
 
 ```cmake
 register_fprime_module(
     AUTOCODER_INPUTS
         "${CMAKE_CURRENT_LIST_DIR}/topology.fpp"
-        "${CMAKE_CURRENT_LIST_DIR}/FPrimeDeployment.cfs-cosmos"
+        "${CMAKE_CURRENT_LIST_DIR}/cfs-cosmos-flag"
     ...
 )
 ```

@@ -2,16 +2,16 @@
 # autocoder/cfs_cosmos.cmake:
 #
 # F Prime autocoder producing the cFS COSMOS target bundle of a deployment. It consumes an empty flag file
-# `<Deployment>.cfs-cosmos` listed in the AUTOCODER_INPUTS of the module that owns the topology (the module
+# named `cfs-cosmos-flag` listed in the AUTOCODER_INPUTS of the module that owns the topology (the module
 # whose fpp autocoding produces `<Deployment>TopologyDictionary.json`, i.e. `<Deployment>_Top`):
 #
 #   register_fprime_module(
 #       AUTOCODER_INPUTS
 #           "${CMAKE_CURRENT_LIST_DIR}/topology.fpp"
-#           "${CMAKE_CURRENT_LIST_DIR}/FPrimeDeployment.cfs-cosmos"
+#           "${CMAKE_CURRENT_LIST_DIR}/cfs-cosmos-flag"
 #       ...
 #
-# Running after the fpp autocoder in the same set, it reads the dictionary fpp declared and runs
+# Running after the fpp autocoder in the same set, it takes the deployment name from that dictionary and runs
 # `fprime-to-cfs-cosmos-target --dictionary <json> --output ${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>`,
 # yielding `<Deployment>_cfs_cosmos` (the module depends on it) and the global `cfs_cosmos` target.
 # Extra generator arguments: FPRIME_CFS_COSMOS_ARGS and FPRIME_CFS_COSMOS_ARGS_<Deployment>.
@@ -26,10 +26,16 @@ set(FPRIME_CFS_COSMOS_OUTPUT "${CMAKE_BINARY_DIR}/cfs-cosmos" CACHE PATH "Where 
 ####
 # `cfs_cosmos_is_supported`:
 #
-# Handles `*.cfs-cosmos` flag files. Changes to the flag file trigger regeneration of the build.
+# Handles files named `cfs-cosmos-flag`. Changes to the flag file trigger regeneration of the build.
 ####
 function(cfs_cosmos_is_supported AC_INPUT_FILE)
-    autocoder_support_by_suffix(".cfs-cosmos" "${AC_INPUT_FILE}" TRUE)
+    get_filename_component(FLAG_NAME "${AC_INPUT_FILE}" NAME)
+    if (FLAG_NAME STREQUAL "cfs-cosmos-flag")
+        set(IS_SUPPORTED TRUE PARENT_SCOPE)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${AC_INPUT_FILE}")
+    else()
+        set(IS_SUPPORTED FALSE PARENT_SCOPE)
+    endif()
 endfunction(cfs_cosmos_is_supported)
 
 ####
@@ -51,7 +57,8 @@ function(cfs_cosmos_setup_autocode MODULE_NAME AC_INPUT_FILE)
         message(FATAL_ERROR "[cfs_cosmos] ${AC_INPUT_FILE}: module ${MODULE_NAME} autocodes no <Deployment>TopologyDictionary.json; "
                             "list the flag file in the topology module's AUTOCODER_INPUTS")
     endif()
-    get_filename_component(DEPLOYMENT "${AC_INPUT_FILE}" NAME_WE)
+    get_filename_component(DEPLOYMENT "${DICTIONARY}" NAME)
+    string(REGEX REPLACE "TopologyDictionary\\.json$" "" DEPLOYMENT "${DEPLOYMENT}")
     if (NOT FPRIME_CFS_COSMOS_GENERATOR)
         find_program(FPRIME_CFS_COSMOS_GENERATOR fprime-to-cfs-cosmos-target)
         if (NOT FPRIME_CFS_COSMOS_GENERATOR)
