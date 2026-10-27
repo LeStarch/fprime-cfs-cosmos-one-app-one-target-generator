@@ -71,7 +71,17 @@ list(APPEND FPRIME_LIBRARY_LOCATIONS "${CMAKE_CURRENT_LIST_DIR}/../libs/fprime-c
 ```
 
 (or `make prep PREP_OPTS=-DFPRIME_LIBRARY_LOCATIONS=/abs/path`; F Prime caches the value on the first configure,
-so start from a fresh build directory). Then either register the `cfs_cosmos` autocoder
+so start from a fresh build directory). An app-level `arch_build.cmake` also runs early enough, but cFS includes it
+inside the `prepare()` function, so the value must go through the cache (and be absolute, or it duplicates on
+every reconfigure once F Prime rewrites the cache entry):
+
+```cmake
+# apps/<app>/arch_build.cmake
+get_filename_component(_CFS_COSMOS_LIB "${CMAKE_CURRENT_LIST_DIR}/../../libs/fprime-cfs-cosmos" ABSOLUTE)
+list(APPEND FPRIME_LIBRARY_LOCATIONS "${_CFS_COSMOS_LIB}")
+list(REMOVE_DUPLICATES FPRIME_LIBRARY_LOCATIONS)
+set(FPRIME_LIBRARY_LOCATIONS "${FPRIME_LIBRARY_LOCATIONS}" CACHE STRING "F Prime library locations" FORCE)
+``` Then either register the `cfs_cosmos` autocoder
 (`cmake/autocoder/cfs_cosmos.cmake`) from the CMakeLists.txt that loads F Prime, before the framework code is
 included:
 
