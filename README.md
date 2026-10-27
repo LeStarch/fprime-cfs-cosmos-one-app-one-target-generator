@@ -61,9 +61,19 @@ ever replaces content this tool generated. All conflicts are detected before any
 
 ## CMake integration (F Prime autocoder)
 
-This repository is an F Prime library: add it to `library_locations` in `settings.ini` (or
-`-DFPRIME_LIBRARY_LOCATIONS=...`) and register the `cfs_cosmos` autocoder (`cmake/autocoder/cfs_cosmos.cmake`)
-from the CMakeLists.txt that loads F Prime, before the framework code is included:
+This repository is an F Prime library: add it to `library_locations` in `settings.ini` (fprime-util projects) or to
+the `FPRIME_LIBRARY_LOCATIONS` CMake variable. A cFS mission has no `settings.ini`; put the path in the mission
+defs, which every app's configure reads:
+
+```cmake
+# <mission>_defs/arch_build_custom.cmake
+list(APPEND FPRIME_LIBRARY_LOCATIONS "${CMAKE_CURRENT_LIST_DIR}/../libs/fprime-cfs-cosmos")
+```
+
+(or `make prep PREP_OPTS=-DFPRIME_LIBRARY_LOCATIONS=/abs/path`; F Prime caches the value on the first configure,
+so start from a fresh build directory). Then either register the `cfs_cosmos` autocoder
+(`cmake/autocoder/cfs_cosmos.cmake`) from the CMakeLists.txt that loads F Prime, before the framework code is
+included:
 
 ```cmake
 set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)
