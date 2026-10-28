@@ -232,7 +232,6 @@ def emit_plugin_fragment(target_name: str, channelized: bool = True, subpacketiz
         [
             "# Merge the VARIABLE at plugin scope and the TARGET before the shared INTERFACE.",
             f"VARIABLE {variable} {target_name}",
-            f'VARIABLE_DESCRIPTION "COSMOS target name for the F Prime application {target_name}"',
             f"TARGET {target_name} <%= {variable} %>",
             "",
             "# Merge these lines under the existing shared UDP INTERFACE.",

@@ -8,7 +8,6 @@ from fprime_cfs_cosmos_generator import cfs, generator, merge
 PLUGIN = textwrap.dedent(
     """\
     VARIABLE cfs_endianness LITTLE_ENDIAN
-    VARIABLE_DESCRIPTION "Processor endianness"
 
     <% include_tlm = true %>
     INTERFACE CFS_INTF udp_interface.rb host 1234 1235 nil nil 128 10.0 nil
@@ -51,11 +50,10 @@ def test_merge_places_files_and_edits_plugin_txt(two_bundles, plugin):
     assert (plugin / "lib/fprime_app_b_msg_id.rb").exists()
     assert (plugin / "lib/protocol_ccsds_checksum_compat.rb").exists()
     lines = text.splitlines()
-    assert lines[:4] == [
+    assert lines[:3] == [
         "VARIABLE cfs_endianness LITTLE_ENDIAN",
-        'VARIABLE_DESCRIPTION "Processor endianness"',
         "VARIABLE fprime_app_a_target_name APP_A",
-        'VARIABLE_DESCRIPTION "COSMOS target name for the F Prime application APP_A"',
+        "VARIABLE fprime_app_b_target_name APP_B",
     ]
     before_interface = text[: text.index("INTERFACE CFS_INTF")]
     assert "TARGET APP_A <%= fprime_app_a_target_name %>\n" in before_interface

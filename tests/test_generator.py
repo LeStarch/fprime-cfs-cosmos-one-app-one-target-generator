@@ -29,6 +29,16 @@ def test_target_file_names_are_relative_to_cmd_tlm(dictionary, tmp_path):
     assert (root / "targets/AP/target.txt").read_text() == expected
 
 
+def test_plugin_fragment_uses_only_plugin_txt_keywords():
+    """openc3 PluginModel accepts VARIABLE/TARGET/INTERFACE blocks only; e.g. VARIABLE_DESCRIPTION is rejected"""
+    keywords = {
+        line.split()[0]
+        for line in generator.emit_plugin_fragment("AP").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    assert keywords == {"VARIABLE", "TARGET", "MAP_TARGET", "PROTOCOL"}
+
+
 def test_exact_ruby_helper_contract(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
     root = generator.write_bundle(app, tmp_path, "AP").directory

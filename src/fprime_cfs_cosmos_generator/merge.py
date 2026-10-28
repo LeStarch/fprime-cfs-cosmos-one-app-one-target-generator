@@ -211,9 +211,7 @@ def merge_plugin_text(
 
     target_lines = [] if skip_target else new_lines(lambda bundle: bundle.target_lines)
     variable_lines = new_lines(lambda bundle: bundle.variable_lines)
-    variable_indices = [
-        index for index, line in enumerate(lines[:start]) if line.startswith(("VARIABLE ", "VARIABLE_DESCRIPTION"))
-    ]
+    variable_indices = [index for index, line in enumerate(lines[:start]) if line.startswith("VARIABLE ")]
     insert_at = variable_indices[-1] + 1 if variable_indices else _target_insert_index(lines, start)
     lines[insert_at:insert_at] = variable_lines + target_lines
     plugin_additions = variable_lines + target_lines
