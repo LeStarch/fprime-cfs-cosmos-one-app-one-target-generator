@@ -148,13 +148,15 @@ depends on (`cfs_cosmos` builds them all). Extra generator flags: cache variable
 fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin"
                         # INTERFACE CFS_INTF          # as --interface; only needed with several INTERFACE lines
                         # DEPLOYMENTS FPrimeDeployment  # default: every flag file
-                        # MANUAL SKIP_TARGET FORCE DRY_RUN ALL  RESERVED_MANIFEST a.json b.json
+                        # MANUAL NO_FORCE SKIP_TARGET DRY_RUN ALL  RESERVED_MANIFEST a.json b.json
                         )
 ```
 
 runs `fprime-cfs-cosmos-merge` on those bundles as a post-build step of each deployment's topology module, i.e.
 building the deployment (`make fprime_app`, `fprime-util build`) merges the plugin whenever a bundle changed
-(stamp-driven; re-running the merge on unchanged bundles is a no-op). `MANUAL` disables the hook and leaves only
+(stamp-driven; re-running the merge on unchanged bundles is a no-op). A changed dictionary replaces the
+target files the tool generated earlier (`--force` is passed by default; `NO_FORCE` turns it off); files it did not
+generate are never replaced, so hand edits inside a generated target fail the merge instead of being lost. `MANUAL` disables the hook and leaves only
 the `cfs_cosmos_merge` (or `NAME`) target; `ALL` adds it to the default build. The INTERFACE is matched on the raw
 `plugin.txt` text, so ERB names such as `CFS-<%= cfs_cpu_index %>_INTF` work and need no argument. Verified on the
 fprime_cfs_reference cFS mission build (`FPrimeDeployment` and `GdsBridge` both use APID 0x000 there, so merge
