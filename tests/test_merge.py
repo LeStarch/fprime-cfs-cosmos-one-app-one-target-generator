@@ -204,8 +204,8 @@ def test_target_line_goes_before_an_erb_block_wrapping_the_interface(two_bundles
     merge.merge(plugin, [first])
     lines = (plugin / "plugin.txt").read_text().splitlines()
     assert lines[1] == "VARIABLE fprime_app_a_target_name APP_A"
-    assert lines[3] == "TARGET APP_A <%= fprime_app_a_target_name %>"
-    assert lines[4] == "<% (1..n).each do |i| %>"
+    assert lines[2] == "TARGET APP_A <%= fprime_app_a_target_name %>"
+    assert lines[3] == "<% (1..n).each do |i| %>"
     assert lines[-2:] == ["        PROTOCOL READ ProtocolFprimeChannelSplitter", "<% end %>"]
 
 
@@ -214,5 +214,5 @@ def test_target_line_without_variables_goes_before_the_erb_block(two_bundles, pl
     (plugin / "plugin.txt").write_text("<% [1].each do |i| %>\n    INTERFACE I_<%= i %> udp_interface.rb\n<% end %>\n")
     merge.merge(plugin, [first])
     lines = (plugin / "plugin.txt").read_text().splitlines()
-    assert lines[2] == "TARGET APP_A <%= fprime_app_a_target_name %>"
-    assert lines[3] == "<% [1].each do |i| %>"
+    assert lines[1] == "TARGET APP_A <%= fprime_app_a_target_name %>"
+    assert lines[2] == "<% [1].each do |i| %>"
