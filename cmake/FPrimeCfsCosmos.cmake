@@ -5,10 +5,12 @@
 # (see autocoder/cfs_cosmos.cmake) into an existing cFS COSMOS plugin tree with `fprime-cfs-cosmos-merge`.
 # Included by library.cmake; call the function from any CMakeLists.txt:
 #
-#   fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin" INTERFACE CFS_INTF)
+#   fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin")
 #
-# The target (`cfs_cosmos_merge` or NAME) is finished once the top-level directory has been processed, so the
-# call may precede the deployments. Build it with `make cfs_cosmos_merge` or pass ALL.
+# The merge runs as a post-build step of every deployment that produced a bundle: building the deployment (its
+# topology module) merges the bundles into the plugin whenever one of them changed. Pass MANUAL to get only the
+# `cfs_cosmos_merge` (or NAME) target instead. The target is finished once the top-level directory has been
+# processed, so the call may precede the deployments.
 ####
 include_guard(GLOBAL)
 
@@ -24,14 +26,15 @@ set(FPRIME_CFS_COSMOS_OUTPUT "${CMAKE_BINARY_DIR}/cfs-cosmos" CACHE PATH "Where 
 #
 # - **PLUGIN_DIR:** (required) plugin source tree containing plugin.txt
 # - **NAME:** target name (default `cfs_cosmos_merge`)
-# - **INTERFACE:** INTERFACE name passed as `--interface`
+# - **INTERFACE:** INTERFACE name passed as `--interface` (only needed when plugin.txt has several INTERFACE lines)
 # - **RESERVED_MANIFEST:** manifests passed as `--reserved-manifest` (repeatable)
 # - **DEPLOYMENTS:** restrict to these deployment names (default: all flag files seen)
 # - **SKIP_TARGET**, **FORCE**, **DRY_RUN:** forwarded flags
-# - **ALL:** make the merge part of the default build
+# - **ALL:** make the merge part of the default build (`make` with no target)
+# - **MANUAL:** do not hook the merge into the deployments' builds; run it via the target only
 ####
 function(fprime_cfs_cosmos_merge)
-    cmake_parse_arguments(MERGE "SKIP_TARGET;FORCE;DRY_RUN;ALL" "PLUGIN_DIR;NAME;INTERFACE" "RESERVED_MANIFEST;DEPLOYMENTS" ${ARGN})
+    cmake_parse_arguments(MERGE "SKIP_TARGET;FORCE;DRY_RUN;ALL;MANUAL" "PLUGIN_DIR;NAME;INTERFACE" "RESERVED_MANIFEST;DEPLOYMENTS" ${ARGN})
     if (NOT MERGE_PLUGIN_DIR)
         message(FATAL_ERROR "fprime_cfs_cosmos_merge requires PLUGIN_DIR")
     endif()
@@ -64,6 +67,7 @@ function(fprime_cfs_cosmos_merge)
     set_property(GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${MERGE_NAME}_PLUGIN_DIR" "${MERGE_PLUGIN_DIR}")
     set_property(GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${MERGE_NAME}_ALL" "${ALL_KEYWORD}")
     set_property(GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${MERGE_NAME}_FLAGS" "${FLAGS}")
+    set_property(GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${MERGE_NAME}_MANUAL" "${MERGE_MANUAL}")
     set_property(GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${MERGE_NAME}_DEPLOYMENTS" "${MERGE_DEPLOYMENTS}")
     set_property(GLOBAL APPEND PROPERTY FPRIME_CFS_COSMOS_MERGE_NAMES "${MERGE_NAME}")
     get_property(SCHEDULED GLOBAL PROPERTY FPRIME_CFS_COSMOS_MERGE_SCHEDULED)
@@ -84,28 +88,47 @@ function(_fprime_cfs_cosmos_merge_finalize NAME)
     get_property(PLUGIN_DIR GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${NAME}_PLUGIN_DIR")
     get_property(ALL_KEYWORD GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${NAME}_ALL")
     get_property(FLAGS GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${NAME}_FLAGS")
+    get_property(MANUAL GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${NAME}_MANUAL")
     get_property(DEPLOYMENTS GLOBAL PROPERTY "FPRIME_CFS_COSMOS_MERGE_${NAME}_DEPLOYMENTS")
-    get_property(BUNDLE_DIRS GLOBAL PROPERTY FPRIME_CFS_COSMOS_BUNDLE_DIRS)
-    get_property(BUNDLE_TARGETS GLOBAL PROPERTY FPRIME_CFS_COSMOS_TARGETS)
-    if (DEPLOYMENTS)
-        set(BUNDLE_DIRS)
-        set(BUNDLE_TARGETS)
-        foreach(DEPLOYMENT IN LISTS DEPLOYMENTS)
-            list(APPEND BUNDLE_DIRS "${FPRIME_CFS_COSMOS_OUTPUT}/${DEPLOYMENT}")
-            list(APPEND BUNDLE_TARGETS "${DEPLOYMENT}_cfs_cosmos")
-        endforeach()
+    if (NOT DEPLOYMENTS)
+        get_property(DEPLOYMENTS GLOBAL PROPERTY FPRIME_CFS_COSMOS_DEPLOYMENTS)
     endif()
-    if (NOT BUNDLE_DIRS)
-        message(WARNING "fprime_cfs_cosmos_merge(${NAME}): no module lists a <Deployment>.cfs-cosmos flag file")
+    if (NOT DEPLOYMENTS)
+        message(WARNING "fprime_cfs_cosmos_merge(${NAME}): no module lists a cfs-cosmos-flag file")
         return()
     endif()
+    set(BUNDLE_DIRS)
+    set(BUNDLE_STAMPS)
+    set(BUNDLE_TARGETS)
+    set(OWNERS)
+    foreach(DEPLOYMENT IN LISTS DEPLOYMENTS)
+        list(APPEND BUNDLE_DIRS "${FPRIME_CFS_COSMOS_OUTPUT}/${DEPLOYMENT}")
+        list(APPEND BUNDLE_STAMPS "${FPRIME_CFS_COSMOS_OUTPUT}/${DEPLOYMENT}.stamp")
+        list(APPEND BUNDLE_TARGETS "${DEPLOYMENT}_cfs_cosmos")
+        get_property(OWNER GLOBAL PROPERTY "FPRIME_CFS_COSMOS_OWNER_${DEPLOYMENT}")
+        if (OWNER)
+            list(APPEND OWNERS "${OWNER}")
+        endif()
+    endforeach()
     if (NOT ALL_KEYWORD STREQUAL "ALL")
         set(ALL_KEYWORD)
     endif()
-    add_custom_target("${NAME}" ${ALL_KEYWORD}
+    # Stamp-driven so the merge re-runs only when a bundle changed, and is a post-build step of the deployments'
+    # topology modules (which already depend on their bundles) unless MANUAL was given. The bundle stamps are
+    # OUTPUTs of other directories, so the Makefile generator needs the target-level dependencies to order them.
+    set(STAMP "${FPRIME_CFS_COSMOS_OUTPUT}/${NAME}.stamp")
+    add_custom_command(
+        OUTPUT "${STAMP}"
         COMMAND ${FPRIME_CFS_COSMOS_MERGER} --plugin "${PLUGIN_DIR}" ${FLAGS} ${BUNDLE_DIRS}
-        DEPENDS ${BUNDLE_TARGETS}
+        COMMAND "${CMAKE_COMMAND}" -E touch "${STAMP}"
+        DEPENDS ${BUNDLE_TARGETS} ${BUNDLE_STAMPS}
         COMMENT "Merging cFS COSMOS bundles into ${PLUGIN_DIR}"
         VERBATIM
     )
+    add_custom_target("${NAME}" ${ALL_KEYWORD} DEPENDS "${STAMP}")
+    if (NOT MANUAL)
+        foreach(OWNER IN LISTS OWNERS)
+            add_dependencies("${OWNER}" "${NAME}")
+        endforeach()
+    endif()
 endfunction(_fprime_cfs_cosmos_merge_finalize)
