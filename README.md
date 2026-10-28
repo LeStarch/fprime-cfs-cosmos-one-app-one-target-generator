@@ -63,6 +63,8 @@ Command Sender and Packet Viewer then hide the same header fields for F Prime ta
   their maximum serialized size, e.g. `2 + 40` for a `String_40`). `ProtocolCcsdsChecksumCompat` rewrites
   `CCSDS_LENGTH` from the bytes actually serialized before computing the checksum, so variable-length
   strings go out with the correct length.
+- `FPRIME_DESCRIPTOR` and `FPRIME_OPCODE` are `APPEND_ID_PARAMETER`s with the command's fixed values and
+  `HIDDEN`, like the string length items below; Command Sender shows only the real arguments.
 - A string argument is emitted as `<arg>_LENGTH` (`FwSizeStoreType`, `HIDDEN`) plus `<arg>` with
   `VARIABLE_BIT_SIZE`; COSMOS writes the length itself when the string is set, so only the string is shown.
 

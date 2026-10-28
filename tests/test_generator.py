@@ -29,6 +29,15 @@ def test_target_file_names_are_relative_to_cmd_tlm(dictionary, tmp_path):
     assert (root / "targets/AP/target.txt").read_text() == expected
 
 
+def test_fixed_id_parameters_are_hidden(dictionary):
+    """FPRIME_DESCRIPTOR/FPRIME_OPCODE are fixed per command; COSMOS fills ID parameters itself"""
+    lines = generator.emit_commands(cfs.cfs_app(dictionary), "AP").splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("  APPEND_ID_PARAMETER "):
+            block = lines[index + 1 : index + 3]
+            assert "    HIDDEN" in block, line
+
+
 def test_string_length_parameters_are_hidden(dictionary):
     """COSMOS fills a VARIABLE_BIT_SIZE length item itself when the string is written; Command Sender shows
     it as a locked parameter unless it is HIDDEN. The string parameter itself stays visible."""
