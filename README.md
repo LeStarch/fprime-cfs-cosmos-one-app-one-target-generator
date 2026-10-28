@@ -157,6 +157,15 @@ adds `cfs_cosmos_merge` (or `NAME`), which runs `fprime-cfs-cosmos-merge` on tho
 fprime_cfs_reference cFS mission build (`FPrimeDeployment` and `GdsBridge` both use APID 0x000 there, so merge
 them separately or give one a different `ComCfg.Apid`).
 
+### fprime < 4.5: first-build ordering
+
+fprime releases before the fix for [nasa/fprime#6273](https://github.com/nasa/fprime/issues/6273) list fpp-to-dict's
+`<System>SystemDictionary.json` as an output of the fpp-to-cpp command, so a build that produces the dictionary before the
+C++ autocode never generates the topology's `*Ac.hpp` files (first build fails, second passes). Because this autocoder makes
+the topology module depend on the bundle, which depends on the dictionary, it would trigger that order deterministically;
+it therefore also depends on the module's fpp C++ outputs, which orders the codegen first. On fixed fprime versions the extra
+dependencies are redundant and harmless.
+
 ## Telemetry modes
 
 - **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the

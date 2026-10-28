@@ -46,6 +46,13 @@ endfunction(cfs_cosmos_is_supported)
 ####
 function(cfs_cosmos_setup_autocode MODULE_NAME AC_INPUT_FILE)
     get_target_property(FPP_OTHER "${MODULE_NAME}" fpp_AUTOCODER_GENERATED_OTHER)
+    # fprime < 4.5 lists fpp-to-dict's <System>SystemDictionary.json as an OUTPUT of the fpp-to-cpp command (nasa/fprime#6273);
+    # if the dictionary is built before the C++ autocode, make takes that command as up to date and never generates the
+    # *Ac.hpp files. Depending on the C++ outputs as well orders the codegen ahead of the dictionary.
+    get_target_property(FPP_SOURCES "${MODULE_NAME}" fpp_AUTOCODER_GENERATED_BUILD_SOURCES)
+    if (NOT FPP_SOURCES)
+        set(FPP_SOURCES "")
+    endif()
     get_target_property(DICTIONARIES "${MODULE_NAME}" FPRIME_DICTIONARIES)
     set(DICTIONARY "")
     foreach(CANDIDATE IN LISTS FPP_OTHER DICTIONARIES)
@@ -73,7 +80,7 @@ function(cfs_cosmos_setup_autocode MODULE_NAME AC_INPUT_FILE)
         COMMAND ${FPRIME_CFS_COSMOS_GENERATOR} --dictionary "${DICTIONARY}" --output "${OUTPUT_DIR}"
             ${FPRIME_CFS_COSMOS_ARGS} ${FPRIME_CFS_COSMOS_ARGS_${DEPLOYMENT}}
         COMMAND "${CMAKE_COMMAND}" -E touch "${STAMP}"
-        DEPENDS "${DICTIONARY}" "${AC_INPUT_FILE}"
+        DEPENDS ${FPP_SOURCES} "${DICTIONARY}" "${AC_INPUT_FILE}"
         COMMENT "Generating cFS COSMOS target bundle for ${DEPLOYMENT}"
         VERBATIM
     )
