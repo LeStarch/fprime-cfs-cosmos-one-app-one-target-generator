@@ -21,6 +21,14 @@ def test_write_bundle_is_standalone(dictionary, tmp_path):
     ]
 
 
+def test_target_file_names_are_relative_to_cmd_tlm(dictionary, tmp_path):
+    """COSMOS joins <target>/cmd_tlm/<name> itself; a cmd_tlm/ prefix makes plugin install fail"""
+    app = cfs.cfs_app(dictionary)
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    expected = "LANGUAGE ruby\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n"
+    assert (root / "targets/AP/target.txt").read_text() == expected
+
+
 def test_exact_ruby_helper_contract(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
     root = generator.write_bundle(app, tmp_path, "AP").directory

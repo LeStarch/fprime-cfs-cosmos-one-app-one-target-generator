@@ -216,8 +216,8 @@ def emit_target() -> str:
     return "\n".join(
         [
             "LANGUAGE ruby",
-            f"COMMANDS cmd_tlm/{COMMANDS_FILE}",
-            f"TELEMETRY cmd_tlm/{TELEMETRY_FILE}",
+            f"COMMANDS {COMMANDS_FILE}",
+            f"TELEMETRY {TELEMETRY_FILE}",
             "",
         ]
     )
