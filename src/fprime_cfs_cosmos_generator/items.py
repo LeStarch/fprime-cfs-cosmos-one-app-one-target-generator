@@ -39,6 +39,7 @@ class CosmosItem:
     length_item: str | None = None
     default: int | float | str | None = None
     fprime_type: str = ""
+    hidden: bool = False
 
     @property
     def is_array(self) -> bool:
@@ -102,6 +103,7 @@ def flatten(name: str, type_class: type[BaseType], layout: WireLayout, descripti
                 length_description,
                 default=0,
                 fprime_type="FwSizeStoreType",
+                hidden=True,
             ),
             CosmosItem(name, 0, "STRING", description, length_item=length_name, default="", fprime_type=fprime_type),
         ]

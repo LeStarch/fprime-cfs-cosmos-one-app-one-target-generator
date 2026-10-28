@@ -30,13 +30,14 @@ set(FPRIME_CFS_COSMOS_OUTPUT "${CMAKE_BINARY_DIR}/cfs-cosmos" CACHE PATH "Where 
 # - **RESERVED_MANIFEST:** manifests passed as `--reserved-manifest` (repeatable)
 # - **DEPLOYMENTS:** restrict to these deployment names (default: all flag files seen)
 # - **SKIP_TARGET**, **DRY_RUN:** forwarded flags
+# - **NO_INHERIT_IGNORES:** do not copy the plugin's IGNORE_PARAMETER/IGNORE_ITEM lines into the F Prime target.txt
 # - **NO_FORCE:** do not pass `--force`; by default the build replaces bundle content it generated earlier so a
 #   changed dictionary updates the plugin (hand-written files are never replaced, with or without --force)
 # - **ALL:** make the merge part of the default build (`make` with no target)
 # - **MANUAL:** do not hook the merge into the deployments' builds; run it via the target only
 ####
 function(fprime_cfs_cosmos_merge)
-    cmake_parse_arguments(MERGE "SKIP_TARGET;FORCE;NO_FORCE;DRY_RUN;ALL;MANUAL" "PLUGIN_DIR;NAME;INTERFACE" "RESERVED_MANIFEST;DEPLOYMENTS" ${ARGN})
+    cmake_parse_arguments(MERGE "SKIP_TARGET;FORCE;NO_FORCE;DRY_RUN;ALL;MANUAL;NO_INHERIT_IGNORES" "PLUGIN_DIR;NAME;INTERFACE" "RESERVED_MANIFEST;DEPLOYMENTS" ${ARGN})
     if (NOT MERGE_PLUGIN_DIR)
         message(FATAL_ERROR "fprime_cfs_cosmos_merge requires PLUGIN_DIR")
     endif()
@@ -49,6 +50,9 @@ function(fprime_cfs_cosmos_merge)
     set(FLAGS)
     if (NOT MERGE_NO_FORCE)
         set(MERGE_FORCE TRUE)
+    endif()
+    if (MERGE_NO_INHERIT_IGNORES)
+        list(APPEND FLAGS --no-inherit-ignores)
     endif()
     foreach(FLAG IN ITEMS SKIP_TARGET FORCE DRY_RUN)
         if (MERGE_${FLAG})

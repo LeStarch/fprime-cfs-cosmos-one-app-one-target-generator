@@ -50,6 +50,11 @@ across all bundles and `--reserved-manifest` files before anything is written. R
 no-op; an existing target with different content is an error unless `--force` is given, and `--force` only
 ever replaces content this tool generated. All conflicts are detected before anything is written.
 
+The F Prime commands share the plugin's CCSDS header helpers, so the merge appends the `IGNORE_PARAMETER` /
+`IGNORE_ITEM` lines found in the plugin's hand-written `targets/*/target.txt` to each F Prime `target.txt`:
+Command Sender and Packet Viewer then hide the same header fields for F Prime targets as for the cFS ones.
+`--no-inherit-ignores` (CMake: `NO_INHERIT_IGNORES`) turns this off.
+
 ## Wire-format notes
 
 - F Prime serializes big-endian whatever the cFS processor endianness is, so every F Prime item carries an
@@ -58,6 +63,8 @@ ever replaces content this tool generated. All conflicts are detected before any
   their maximum serialized size, e.g. `2 + 40` for a `String_40`). `ProtocolCcsdsChecksumCompat` rewrites
   `CCSDS_LENGTH` from the bytes actually serialized before computing the checksum, so variable-length
   strings go out with the correct length.
+- A string argument is emitted as `<arg>_LENGTH` (`FwSizeStoreType`, `HIDDEN`) plus `<arg>` with
+  `VARIABLE_BIT_SIZE`; COSMOS writes the length itself when the string is set, so only the string is shown.
 
 ## CMake integration (F Prime autocoder)
 

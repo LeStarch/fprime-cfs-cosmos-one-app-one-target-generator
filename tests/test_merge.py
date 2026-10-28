@@ -216,3 +216,24 @@ def test_target_line_without_variables_goes_before_the_erb_block(two_bundles, pl
     lines = (plugin / "plugin.txt").read_text().splitlines()
     assert lines[1] == "TARGET APP_A <%= fprime_app_a_target_name %>"
     assert lines[2] == "<% [1].each do |i| %>"
+
+
+def test_merge_inherits_ignore_lines_from_existing_targets(two_bundles, plugin):
+    """The plugin's hand-written targets hide the shared CCSDS header fields via target.txt; the F Prime
+    targets use the same header helpers, so they inherit those lines (idempotent, opt-out)"""
+    first, _second = two_bundles
+    (plugin / "targets/TO/target.txt").write_text(
+        "IGNORE_PARAMETER CCSDS_STREAMID\n  IGNORE_PARAMETER   CCSDS_SEQUENCE\nIGNORE_ITEM CCSDS_LENGTH\nREQUIRE x.rb\n"
+    )
+    merge.merge(plugin, [first])
+    text = (plugin / "targets/APP_A/target.txt").read_text()
+    assert text.startswith("LANGUAGE ruby\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n")
+    assert text.splitlines()[-3:] == [
+        "IGNORE_PARAMETER CCSDS_STREAMID",
+        "IGNORE_PARAMETER CCSDS_SEQUENCE",
+        "IGNORE_ITEM CCSDS_LENGTH",
+    ]
+    assert "REQUIRE" not in text
+    assert merge.merge(plugin, [first]).copied == []
+    merge.merge(plugin, [first], force=True, inherit_ignores=False)
+    assert "IGNORE" not in (plugin / "targets/APP_A/target.txt").read_text()

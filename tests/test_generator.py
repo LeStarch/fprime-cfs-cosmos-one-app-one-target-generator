@@ -29,6 +29,18 @@ def test_target_file_names_are_relative_to_cmd_tlm(dictionary, tmp_path):
     assert (root / "targets/AP/target.txt").read_text() == expected
 
 
+def test_string_length_parameters_are_hidden(dictionary):
+    """COSMOS fills a VARIABLE_BIT_SIZE length item itself when the string is written; Command Sender shows
+    it as a locked parameter unless it is HIDDEN. The string parameter itself stays visible."""
+    lines = generator.emit_commands(cfs.cfs_app(dictionary), "AP").splitlines()
+    length = next(index for index, line in enumerate(lines) if line.startswith("  APPEND_PARAMETER arg1_LENGTH "))
+    string = next(index for index, line in enumerate(lines) if line.startswith("  APPEND_PARAMETER arg1 0 STRING"))
+    assert "    HIDDEN" in lines[length + 1 : string]
+    following = lines[string + 1 :]
+    block = following[: next(i for i, line in enumerate(following) if not line.startswith("    "))]
+    assert "    HIDDEN" not in block
+
+
 def test_plugin_fragment_uses_only_plugin_txt_keywords():
     """openc3 PluginModel accepts VARIABLE/TARGET/INTERFACE blocks only; e.g. VARIABLE_DESCRIPTION is rejected"""
     keywords = {

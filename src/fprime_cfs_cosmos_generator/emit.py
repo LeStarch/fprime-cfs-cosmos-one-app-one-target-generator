@@ -142,6 +142,8 @@ def _parameter_lines(item: CosmosItem, id_value: int | None = None) -> list[str]
         scalar = f"{name} {item.bit_size} {item.data_type} {minimum} {maximum} {default}"
         lines = [f"  {keyword} {scalar} {quote(item.description)}"]
     lines.extend(_modifier_lines(item))
+    if item.hidden:
+        lines.append("    HIDDEN")
     return lines
 
 

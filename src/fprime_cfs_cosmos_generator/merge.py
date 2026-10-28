@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -240,6 +241,33 @@ def _generated(path: Path) -> bool:
         return False
 
 
+IGNORE_KEYWORDS = ("IGNORE_PARAMETER ", "IGNORE_ITEM ")
+IGNORE_HEADER = "# Inherited from the plugin's existing targets by fprime-cfs-cosmos-merge"
+
+
+def inherited_ignore_lines(plugin: Path, bundle_targets: set[str]) -> list[str]:
+    """IGNORE_PARAMETER/IGNORE_ITEM lines of the plugin's hand-written targets. The F Prime commands share the
+    plugin's CCSDS header helpers, so they hide the same header fields in Command Sender/Packet Viewer."""
+    lines: list[str] = []
+    for target_file in sorted(plugin.glob("targets/*/target.txt")):
+        if target_file.parent.name.upper() in bundle_targets or _generated(target_file.parent):
+            continue
+        for raw in target_file.read_text().splitlines():
+            line = " ".join(raw.split())
+            if line.startswith(IGNORE_KEYWORDS) and line not in lines:
+                lines.append(line)
+    return lines
+
+
+def _stage_target(source: Path, staging: Path, ignores: list[str]) -> Path:
+    staged = staging / source.name
+    shutil.copytree(source, staged)
+    target_file = staged / "target.txt"
+    text = target_file.read_text()
+    target_file.write_text(text + "\n" + "\n".join([IGNORE_HEADER, *ignores]) + "\n")
+    return staged
+
+
 def _place(source: Path, destination: Path, label: str, force: bool, write: bool, report: MergeReport) -> None:
     if destination.exists():
         if _same_tree(source, destination):
@@ -269,6 +297,7 @@ def merge(
     force: bool = False,
     dry_run: bool = False,
     skip_target: bool = False,
+    inherit_ignores: bool = True,
 ) -> MergeReport:
     plugin = Path(plugin)
     plugin_file = plugin / PLUGIN_FILE
@@ -283,12 +312,19 @@ def merge(
         plugin_file.read_bytes().decode(), bundles, interface, skip_target
     )
 
+    ignores = inherited_ignore_lines(plugin, {bundle.target.upper() for bundle in bundles}) if inherit_ignores else []
+    staged: dict[str, Path] = {}
+
     def place_all(write: bool) -> MergeReport:
         report = MergeReport(plugin, interface_name, plugin_additions=additions)
         shared_seen: dict[str, Path] = {}
         for bundle in bundles:
             for relative in bundle.manifest.get("target_files", []):
                 source, label = bundle.directory / relative, f"{bundle.target}: {relative}"
+                if ignores and relative == f"targets/{bundle.target}":
+                    if relative not in staged:
+                        staged[relative] = _stage_target(source, staging, ignores)
+                    source = staged[relative]
                 _place(source, plugin / relative, label, force, write, report)
             for relative in bundle.manifest.get("shared_files", []):
                 source, label = bundle.directory / relative, f"{bundle.target}: {relative}"
@@ -300,10 +336,12 @@ def merge(
                 _place(source, plugin / relative, label, force, write, report)
         return report
 
-    report = place_all(write=False)
-    if dry_run:
-        return report
-    report = place_all(write=True)
+    with tempfile.TemporaryDirectory(prefix="fprime-cfs-cosmos-merge-") as staging_name:
+        staging = Path(staging_name)
+        report = place_all(write=False)
+        if dry_run:
+            return report
+        report = place_all(write=True)
     if additions:
         temporary = plugin_file.with_name(plugin_file.name + ".fprime-merge.tmp")
         temporary.write_bytes(new_text.encode())

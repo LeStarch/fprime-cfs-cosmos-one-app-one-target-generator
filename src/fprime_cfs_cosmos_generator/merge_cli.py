@@ -32,6 +32,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--force", action="store_true", help="Replace existing target/lib files that differ")
     result.add_argument("--dry-run", action="store_true", help="Report what would change without writing")
     result.add_argument(
+        "--no-inherit-ignores",
+        action="store_true",
+        help="Do not copy the plugin targets' IGNORE_PARAMETER/IGNORE_ITEM lines into the F Prime target.txt",
+    )
+    result.add_argument(
         "--skip-target",
         action="store_true",
         help="Do not insert TARGET lines (the plugin declares targets itself, e.g. from a directory loop)",
@@ -50,6 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.force,
             arguments.dry_run,
             arguments.skip_target,
+            inherit_ignores=not arguments.no_inherit_ignores,
         )
     except (MergeError, OSError, ValueError, KeyError) as error:
         print(f"[ERROR] {error}", file=sys.stderr)
