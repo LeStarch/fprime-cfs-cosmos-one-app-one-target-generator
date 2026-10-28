@@ -237,3 +237,37 @@ def test_merge_inherits_ignore_lines_from_existing_targets(two_bundles, plugin):
     assert merge.merge(plugin, [first]).copied == []
     merge.merge(plugin, [first], force=True, inherit_ignores=False)
     assert "IGNORE" not in (plugin / "targets/APP_A/target.txt").read_text()
+
+
+def test_write_protocol_is_declared_before_the_plugin_write_protocols(two_bundles):
+    """COSMOS runs WRITE protocols in reverse declaration order; ours must run last to finalize length/checksum"""
+    plugin = PLUGIN.replace(
+        "    PROTOCOL READ LengthProtocol",
+        "    PROTOCOL WRITE ProtocolCcsdsChecksum\n    PROTOCOL WRITE ProtocolCcsdsLength\n"
+        "    PROTOCOL READ LengthProtocol",
+    )
+    text, additions, _name = merge.merge_plugin_text(plugin, [merge.load_bundle(p) for p in two_bundles], None)
+    block = [line.strip() for line in text.splitlines() if line.startswith("    ")]
+    assert block.index("PROTOCOL WRITE ProtocolCcsdsChecksumCompat") < block.index(
+        "PROTOCOL WRITE ProtocolCcsdsChecksum"
+    )
+    assert block.index("PROTOCOL READ ProtocolFprimeChannelSplitter") > block.index(
+        "PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil"
+    )
+    assert "    PROTOCOL WRITE ProtocolCcsdsChecksumCompat" in additions
+    again, additions, _name = merge.merge_plugin_text(text, [merge.load_bundle(p) for p in two_bundles], None)
+    assert again == text and additions == []
+
+
+def test_misplaced_write_protocol_from_an_older_merge_is_moved(two_bundles):
+    plugin = PLUGIN.replace(
+        "    PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil",
+        "    PROTOCOL WRITE ProtocolCcsdsLength\n    PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil\n"
+        "    MAP_TARGET <%= fprime_app_a_target_name %>\n    PROTOCOL WRITE ProtocolCcsdsChecksumCompat\n"
+        "    PROTOCOL READ ProtocolFprimeChannelSplitter",
+    )
+    text, additions, _name = merge.merge_plugin_text(plugin, [merge.load_bundle(p) for p in two_bundles], None)
+    block = [line.strip() for line in text.splitlines() if line.startswith("    ")]
+    assert block.count("PROTOCOL WRITE ProtocolCcsdsChecksumCompat") == 1
+    assert block.index("PROTOCOL WRITE ProtocolCcsdsChecksumCompat") < block.index("PROTOCOL WRITE ProtocolCcsdsLength")
+    assert additions

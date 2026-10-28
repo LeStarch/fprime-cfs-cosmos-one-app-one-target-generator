@@ -161,7 +161,8 @@ def test_reserved_manifest_rejects_target_and_mid_collisions(dictionary, tmp_pat
 def test_checksum_runtime_updates_length_and_both_field_names():
     source = (generator.RUNTIME / generator.CHECKSUM_PROTOCOL).read_text()
     assert "['SEC_CRC', 'CCSDS_CHECKSUM']" in source
-    assert "packet.buffer.bytesize - 7" in source
+    assert "packet.buffer.bytesize - CCSDS_LENGTH_OFFSET" in source and "CCSDS_LENGTH_OFFSET = 7" in source
+    assert "find_item(packet, LENGTH_NAMES, 32, 16)" in source and "find_item(packet, CHECKSUM_NAMES, 56, 8)" in source
 
 
 def test_fprime_items_are_big_endian_regardless_of_processor_endian(dictionary, tmp_path):

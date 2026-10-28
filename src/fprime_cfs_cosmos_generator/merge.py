@@ -152,6 +152,9 @@ def _block_end(lines: list[str], start: int) -> int:
     return end
 
 
+WRITE_PROTOCOL = "PROTOCOL WRITE "
+
+
 def select_interface(lines: list[str], name: str | None) -> int:
     matches = [(index, match) for index, line in enumerate(lines) if (match := INTERFACE_LINE.match(line))]
     if name:
@@ -193,12 +196,27 @@ def merge_plugin_text(
         if sample
         else " " * (len(lines[start]) - len(lines[start].lstrip()) + 4)
     )
-    additions: list[str] = []
+    write_protocols: list[str] = []
+    others: list[str] = []
     for bundle in bundles:
         for line in bundle.interface_lines:
-            if line not in existing_block and (indent + line) not in additions:
-                additions.append(indent + line)
-    lines[end:end] = additions
+            bucket = write_protocols if line.startswith(WRITE_PROTOCOL) else others
+            if line not in bucket:
+                bucket.append(line)
+    # COSMOS runs WRITE protocols in reverse declaration order (Interface#add_protocol unshifts them), so the
+    # F Prime protocol that finalizes the CCSDS length/checksum goes before the plugin's own WRITE protocols.
+    kept = [line for line in block if line.strip() not in write_protocols]
+    first_protocol = next((index for index, line in enumerate(kept) if line.strip().startswith("PROTOCOL ")), len(kept))
+    new_block = (
+        kept[:first_protocol]
+        + [indent + line for line in write_protocols]
+        + kept[first_protocol:]
+        + [indent + line for line in others if line not in existing_block]
+    )
+    additions = [line for index, line in enumerate(new_block) if index >= len(block) or block[index] != line]
+    if new_block == block:
+        additions = []
+    lines[start + 1 : end] = new_block
 
     existing_plugin = {line.strip() for line in lines if line and not line[0].isspace()}
 

@@ -28,7 +28,8 @@ The external build places these files in its plugin tree, merges the plugin
 fragment, deduplicates byte-identical shared runtime files, and performs final
 cross-application MID collision checks using the manifests. The shared write
 protocol updates the CCSDS length from the serialized command and writes the
-cFS XOR checksum through either `SEC_CRC` or `CCSDS_CHECKSUM`.
+cFS XOR checksum; the header items are found by name (`CCSDS_LENGTH`; `SEC_CRC` or `CCSDS_CHECKSUM`) or by their
+fixed CCSDS position (bytes 4-5 and 7) when the plugin's header helper names them differently.
 
 ## Merge bundles into an existing plugin
 
@@ -41,9 +42,12 @@ fprime-cfs-cosmos-merge --plugin path/to/cfs-cosmos-plugin \
 For each bundle the merge copies `targets/<APP>/` and `lib/fprime_<app>_msg_id.rb`, places the shared
 runtime files once (they must be byte-identical across bundles), appends the `VARIABLE` lines after the
 plugin's existing `VARIABLE`s, inserts `TARGET <APP> <%= ... %>` immediately before the chosen `INTERFACE`
-(`--skip-target` if the plugin declares targets itself), and appends `MAP_TARGET <%= ... %>` plus a single
-`PROTOCOL WRITE ProtocolCcsdsChecksumCompat` (and `PROTOCOL READ ProtocolFprimeChannelSplitter` for flat
-channelized bundles) to the end of that `INTERFACE` block. The interface is
+(`--skip-target` if the plugin declares targets itself), appends `MAP_TARGET <%= ... %>` (and `PROTOCOL READ
+ProtocolFprimeChannelSplitter` for flat channelized bundles) to the end of that `INTERFACE` block, and declares a
+single `PROTOCOL WRITE ProtocolCcsdsChecksumCompat` *before* the plugin's own `PROTOCOL` lines: COSMOS runs WRITE
+protocols in reverse declaration order, so this makes the F Prime protocol run last and finalize the CCSDS length
+(variable-length string arguments shrink the packet below the header helper's static length) and the cFS checksum,
+whatever the plugin's own protocols computed. A compat line left at the end of the block by an older merge is moved. The interface is
 the only `INTERFACE` in `plugin.txt` or the one selected by `--interface`. Nothing else in the plugin is
 touched; ordinary cFS targets stay as they are. Target names and message IDs are checked for collisions
 across all bundles and `--reserved-manifest` files before anything is written. Re-running the merge is a
