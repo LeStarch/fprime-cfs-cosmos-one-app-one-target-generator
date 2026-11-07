@@ -27,7 +27,11 @@ FRAGMENT_FILE = "plugin.fragment.txt"
 MANIFEST_FILE = "manifest.json"
 PLUGIN_FILE = "plugin.txt"
 INTERFACE_LINE = re.compile(r"^(?P<indent>\s*)INTERFACE\s+(?P<name>(?:<%.*?%>|\S)+)")
-ERB_LOOP_LINE = re.compile(r"<%[^%]*?\b(?:each|each_with_index|times|upto|downto|step|loop|while|until|for)\b")
+ERB_LOOP_LINE = re.compile(
+    r"<%(?![=#])[^%]*?(?:\.\w+[?!]?(?:\([^)]*\))?\s*(?:do\b|\{)|\b(?:for|while|until|loop)\b)"
+)
+MAPPING_LINE = re.compile(r"^MAP_(?:CMD_|TLM_)?TARGET\b")
+ERB_CONTROL_LINE = re.compile(r"^<%(?![=#]).*%>$")
 GENERATED_MARKER = "# Generated F Prime cFS"
 MAP_TARGET = "MAP_TARGET "
 BUNDLE_MAP_TARGET = re.compile(r"^MAP_TARGET\s+<%=\s*fprime_[a-z0-9_]+_target_name\s*%>$")
@@ -82,7 +86,6 @@ class MergeReport:
             lines.append(f"  compat helpers not installed: {self.compat_skipped}")
         lines.extend(f"  {PLUGIN_FILE} + {line.strip()}" for line in self.plugin_additions)
         lines.extend(f"  {PLUGIN_FILE} ~ {line.strip()} (moved)" for line in self.plugin_moves)
-        lines.extend(f"  WARNING   {warning}" for warning in self.warnings)
         return "\n".join(lines)
 
 
@@ -95,9 +98,6 @@ class PluginText:
     interface: str
     moves: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-
-    def __iter__(self):
-        return iter((self.text, self.additions, self.interface))
 
 
 def _bundle_files(manifest: dict, directory: Path) -> list[str]:
@@ -212,12 +212,34 @@ def _target_insert_index(lines: list[str], interface_start: int) -> int:
     return max(index - 1, 0)
 
 
+ERB_END_LINE = re.compile(r"^<%-?\s*(?:end\b|\})")
+ERB_OPENER_LINE = re.compile(
+    r"^<%(?![=#])(?!-?\s*(?:end|else|elsif|when)\b).*(?:\bdo\b|\{\s*(?:\|[^|]*\|)?\s*-?%>)"
+    r"|^<%(?![=#])\s*(?:if|unless|case|while|until|for|begin)\b"
+)
+
+
 def _enclosing_erb_loop(lines: list[str], interface_start: int) -> str | None:
-    """The top-level ERB line opening the block that holds an indented INTERFACE, when it is a loop"""
+    """The nearest enclosing ERB loop of an indented INTERFACE: walk upwards over column-0 ERB lines, skipping
+    blocks that already closed (`<% end %>`), until a plain plugin keyword line ends the search"""
     if not lines[interface_start][0].isspace():
         return None
-    opening = lines[_target_insert_index(lines, interface_start)].strip()
-    return opening if ERB_LOOP_LINE.search(opening) else None
+    depth = 0
+    for index in range(interface_start - 1, -1, -1):
+        raw = lines[index]
+        line = raw.strip()
+        if not line or raw[0].isspace():
+            continue
+        if ERB_END_LINE.match(line):
+            depth += 1
+        elif ERB_OPENER_LINE.match(line):
+            if depth > 0:
+                depth -= 1
+            elif ERB_LOOP_LINE.search(line):
+                return line
+        elif not line.startswith("<%"):
+            break
+    return None
 
 
 def _continuation_count(lines: list[str], start: int, end: int) -> int:
@@ -240,6 +262,10 @@ def _moved_lines(before: list[str], after: list[str]) -> list[str]:
 
 
 def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, skip_target: bool = False) -> PluginText:
+    """Merge the bundles' plugin.txt fragment lines into `text`: VARIABLE/TARGET at plugin scope, MAP_TARGET ahead
+    of the plugin's own mappings, the WRITE protocol ahead of the plugin's protocols, READ protocols at the end of
+    the block. Lines an older merge left elsewhere are moved (`PluginText.moves`); an INTERFACE inside an ERB loop
+    is reported in `PluginText.warnings`."""
     newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.replace("\r\n", "\n").split("\n")
     if lines and lines[-1] == "":
@@ -279,9 +305,10 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
     kept = [line for line in body if line.strip() not in write_protocols and not bundle_map(line)]
     existing_maps = [line.strip() for line in body if bundle_map(line)]
     map_group = existing_maps + [line for line in map_targets if line not in existing_maps]
-    first_map = next((index for index, line in enumerate(kept) if line.strip().startswith(MAP_TARGET)), None)
-    first_protocol = next((index for index, line in enumerate(kept) if line.strip().startswith("PROTOCOL ")), len(kept))
-    map_at = first_map if first_map is not None else min(first_protocol, len(kept))
+    map_at = next((index for index, line in enumerate(kept) if MAPPING_LINE.match(line.strip())), 0)
+    # an ERB guard (`<% if ... %>`) wrapping the plugin's first mapping must not swallow ours
+    while map_at > 0 and ERB_CONTROL_LINE.match(kept[map_at - 1].strip()):
+        map_at -= 1
     kept = kept[:map_at] + [indent + line for line in map_group] + kept[map_at:]
     # COSMOS runs WRITE protocols in reverse declaration order (Interface#add_protocol unshifts them), so the
     # F Prime protocol that finalizes the CCSDS length/checksum goes before the plugin's own WRITE protocols.
@@ -305,8 +332,9 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
         targets = ", ".join(bundle.target for bundle in bundles)
         warnings.append(
             f"{PLUGIN_FILE}: INTERFACE {interface_name} is inside the ERB loop {loop!r}; the MAP_TARGET lines for "
-            f"{targets} render once per iteration while each TARGET is declared once, so the loop must run a "
-            f"single iteration (e.g. $cfs_fleet_globals_num_cfs_targets = 1) or the plugin will fail to install"
+            f"{targets} render once per iteration, so every interface of the loop maps the F Prime target and "
+            f"COSMOS keeps only the last mapping (F Prime packets on the other interfaces are not identified). Run "
+            f"the loop once (e.g. $cfs_fleet_globals_num_cfs_targets = 1) or map the F Prime target by hand"
         )
 
     existing_plugin = {line.strip() for line in lines if line and not line[0].isspace()}
@@ -402,8 +430,11 @@ def required_helpers(bundles: list[Bundle]) -> list[str]:
     """Union of the bundles' manifest `required_helpers` (manifests predating the field need the four defaults)"""
     names: list[str] = []
     for bundle in bundles:
-        for name in bundle.manifest.get("required_helpers", COMPAT_HELPERS):
-            if not re.fullmatch(r"[a-z][a-z0-9_]*", str(name)):
+        listed = bundle.manifest.get("required_helpers", list(COMPAT_HELPERS))
+        if not isinstance(listed, list) or not all(isinstance(name, str) for name in listed):
+            raise MergeError(f"{bundle.directory}: manifest required_helpers must be a list of helper names")
+        for name in listed:
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
                 raise MergeError(f"{bundle.directory}: manifest required helper {name!r} is not a plain file name")
             if name not in names:
                 names.append(name)
@@ -422,10 +453,9 @@ def compat_detected(plugin: Path) -> bool:
 
 @dataclass
 class CompatPlan:
-    install: list[tuple[Path, Path, str]] = field(default_factory=list)  # (source, destination, label)
+    install: list[tuple[str, Path, str]] = field(default_factory=list)  # (helper name, destination, label)
     kept: list[str] = field(default_factory=list)
     skipped: str | None = None
-    warnings: list[str] = field(default_factory=list)
 
 
 def plan_compat_helpers(plugin: Path, names: list[str], enabled: bool) -> CompatPlan:
@@ -443,7 +473,7 @@ def plan_compat_helpers(plugin: Path, names: list[str], enabled: bool) -> Compat
     foreign: dict[str, list[Path]] = {}
     generated: dict[str, list[Path]] = {}
     missing: list[str] = []
-    for name in names:
+    for name in [name for name in names if (COMPAT_RUNTIME / f"{name}.rb").is_file()]:
         files = helper_files(plugin, name)
         ours = [path for path in files if _generated(path)]
         theirs = [path for path in files if not _generated(path)]
@@ -463,7 +493,8 @@ def plan_compat_helpers(plugin: Path, names: list[str], enabled: bool) -> Compat
         absent = ", ".join(f"{name}.rb" for name in [*missing, *generated])
         raise MergeError(
             f"the plugin provides only part of the helpers the bundles require: hand-written {present}; "
-            f"not hand-written: {absent}. Provide all of them or remove the hand-written ones"
+            f"not hand-written: {absent}. Hand-written and generated compatibility helpers cannot be mixed: "
+            f"provide hand-written versions of all of them, or none"
         )
     if foreign:
         plan.skipped = "hand-written helpers present: " + ", ".join(
@@ -471,28 +502,31 @@ def plan_compat_helpers(plugin: Path, names: list[str], enabled: bool) -> Compat
         )
         return plan
     for name in [*missing, *generated]:
-        source = COMPAT_RUNTIME / f"{name}.rb"
-        if not source.is_file():
-            plan.warnings.append(
-                f"required helper {name}.rb is not provided by the plugin and this tool has no compatibility "
-                f"version of it; the generated cmd/tlm files will not render until it exists under lib/"
-            )
-            continue
-        destinations = generated.get(name) or [plugin / "lib" / f"{name}.rb"]
-        for destination in destinations:
-            plan.install.append((Path(str(source)), destination, f"compat: {destination.relative_to(plugin)}"))
+        for destination in generated.get(name) or [plugin / "lib" / f"{name}.rb"]:
+            plan.install.append((name, destination, f"compat: {destination.relative_to(plugin)}"))
     return plan
 
 
 def missing_helper_warnings(plugin: Path, names: list[str], planned: list[Path]) -> list[str]:
-    """Helpers neither present in the tree nor about to be installed"""
+    """Helpers neither present in the tree nor about to be installed. Only judged for nasa-style plugins (the
+    layout this tool knows); other plugins may load their helpers from a gem the tool cannot see."""
+    if not compat_detected(plugin):
+        return []
     planned_set = {path.resolve() for path in planned}
-    return [
-        f"required helper {name}.rb not found under lib/ or targets/*/lib/; the generated cmd/tlm files will fail to "
-        f"render (pass a plugin that provides it or let the merge install the compatibility helpers)"
-        for name in names
-        if not helper_files(plugin, name) and (plugin / "lib" / f"{name}.rb").resolve() not in planned_set
-    ]
+    warnings = []
+    for name in names:
+        if helper_files(plugin, name) or (plugin / "lib" / f"{name}.rb").resolve() in planned_set:
+            continue
+        reason = (
+            "this tool ships no compatibility version of it"
+            if not (COMPAT_RUNTIME / f"{name}.rb").is_file()
+            else "the compatibility helpers were not installed"
+        )
+        warnings.append(
+            f"required helper {name}.rb not found under lib/ or targets/*/lib/ and {reason}; the generated cmd/tlm "
+            f"files will fail to render until it exists"
+        )
+    return warnings
 
 
 def merge(
@@ -506,6 +540,9 @@ def merge(
     inherit_ignores: bool = True,
     compat_helpers: bool = True,
 ) -> MergeReport:
+    """Merge the bundles into the plugin tree. `compat_helpers=False` skips installing the nasa/cfs-cosmos-plugin
+    compatibility helpers. The report lists copied/unchanged/kept files, plugin.txt additions and moves, why the
+    compatibility helpers were not installed, and warnings (ERB loop, helpers still missing)."""
     plugin = Path(plugin)
     plugin_file = plugin / PLUGIN_FILE
     if not plugin_file.is_file():
@@ -516,10 +553,11 @@ def merge(
     check_collisions(bundles, reserved_manifests)
 
     plugin_text = merge_plugin_text(plugin_file.read_bytes().decode(), bundles, interface, skip_target)
-    new_text, additions, interface_name = plugin_text
+    new_text, additions, interface_name = plugin_text.text, plugin_text.additions, plugin_text.interface
     compat = plan_compat_helpers(plugin, required_helpers(bundles), compat_helpers)
-    warnings = plugin_text.warnings + compat.warnings
-    warnings += missing_helper_warnings(plugin, required_helpers(bundles), [item[1] for item in compat.install])
+    warnings = plugin_text.warnings + missing_helper_warnings(
+        plugin, required_helpers(bundles), [item[1] for item in compat.install]
+    )
 
     ignores = inherited_ignore_lines(plugin, {bundle.target.upper() for bundle in bundles}) if inherit_ignores else []
     staged: dict[str, Path] = {}
@@ -551,8 +589,9 @@ def merge(
                     continue
                 shared_seen[relative] = source
                 _place(source, plugin / relative, label, force, write, report)
-        for source, destination, label in compat.install:
-            _place(source, destination, label, force, write, report)
+        for name, destination, label in compat.install:
+            with resources.as_file(COMPAT_RUNTIME / f"{name}.rb") as source:
+                _place(Path(source), destination, label, force, write, report)
         return report
 
     with tempfile.TemporaryDirectory(prefix="fprime-cfs-cosmos-merge-") as staging_name:

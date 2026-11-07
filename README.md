@@ -41,9 +41,11 @@ fprime-cfs-cosmos-merge --plugin path/to/cfs-cosmos-plugin \
 
 For each bundle the merge copies `targets/<APP>/` and `lib/fprime_<app>_msg_id.rb`, places the shared
 runtime files once (they must be byte-identical across bundles), appends the `VARIABLE` lines after the
-plugin's existing `VARIABLE`s, inserts `TARGET <APP> <%= ... %>` immediately before the chosen `INTERFACE`
-(`--skip-target` if the plugin declares targets itself), places `MAP_TARGET <%= ... %>` *before* the plugin's own
-`MAP_TARGET` lines (right after the `INTERFACE` statement and its `&` continuation lines when there are none),
+plugin's existing `VARIABLE`s, inserts `TARGET <APP> <%= ... %>` after the plugin's last `VARIABLE` (immediately
+before the chosen `INTERFACE`, or the ERB block holding it, when there are none; `--skip-target` if the plugin
+declares targets itself), places `MAP_TARGET <%= ... %>` *before* the plugin's own `MAP_TARGET` /
+`MAP_CMD_TARGET` / `MAP_TLM_TARGET` lines and any `<% if %>` guarding them (right after the `INTERFACE` statement
+and its `&` continuation lines when there are none),
 appends `PROTOCOL READ ProtocolFprimeChannelSplitter` for flat channelized bundles to the end of that `INTERFACE`
 block, and declares a single `PROTOCOL WRITE ProtocolCcsdsChecksumCompat` *before* the plugin's own `PROTOCOL`
 lines: COSMOS runs WRITE protocols in reverse declaration order, so this makes the F Prime protocol run last and
@@ -78,16 +80,20 @@ are stamped `# Generated F Prime cFS`, so a later merge with `--force` upgrades 
 hand-written files of the same names are never replaced — a complete hand-written set is used as is, a partial one
 is an error (before anything is written), and so is a generated and a hand-written copy of the same helper.
 `--no-compat-helpers` (CMake: `NO_COMPAT_HELPERS`) skips all of this and reports existing generated helpers as
-`kept`. A required helper that is still missing after the merge is reported as a `WARNING`. Only files reachable
+`kept`. A required helper that is still missing after the merge of a nasa-style plugin is reported as a
+`[WARNING]` on stderr (other plugins may load their helpers from a gem the tool cannot see, so they are not
+judged). Only files reachable
 from `lib/` or `targets/<APP>/lib/` can be loaded by that target's microservices at runtime, so the compatibility
 `Ccsds.tlm` deliberately omits nasa's `PACKET_TIME` conversion (its Ruby file lives in `targets/CFS/lib`); the
 generated `FPRIME_TIME` item carries the F Prime timestamp.
 
 nasa/cfs-cosmos-plugin's `INTERFACE` sits inside `<% (1..$cfs_fleet_globals_num_cfs_targets).each ... %>`, so the
-merge warns that the inserted `MAP_TARGET` renders once per cFS instance while the F Prime `TARGET` is declared
-once: set `$cfs_fleet_globals_num_cfs_targets = 1` in `targets/CFS_FLEET/lib/cfs_fleet_globals.rb` (or map the
-F Prime targets by hand) before building the plugin. With that one edit, nasa/cfs-cosmos-plugin `dev` plus the
-merged bundle builds and loads with no further changes. At load time set `cfs_1_intf_ip` to the address cFS
+merge warns that the inserted `MAP_TARGET` renders once per cFS instance: every interface of the loop maps the
+F Prime target and COSMOS keeps only the last mapping, so F Prime packets arriving on the other interfaces are not
+identified. Set `$cfs_fleet_globals_num_cfs_targets = 1` in `targets/CFS_FLEET/lib/cfs_fleet_globals.rb` (or map
+the F Prime targets by hand) before building the plugin; the merge cannot evaluate the Ruby global, so the warning
+is printed either way. With that one edit, nasa/cfs-cosmos-plugin `dev` plus the merged bundle builds and loads
+with no further changes. At load time set `cfs_1_intf_ip` to the address cFS
 listens on for commands (`ci_lab`, UDP 1234 — the Docker bridge gateway when cFS runs on the host),
 `global_tlm_output_ip` to the address `to_lab` sends telemetry to (UDP 2234, the host's address), publish
 `2234/udp` on the `openc3-operator` container, and enable `to_lab` output towards that address (`to_lab` has one
@@ -95,6 +101,13 @@ destination; another ground system enabling it takes the stream). `cfs_endiannes
 processor. F Prime event packets (0x0802) have no COSMOS definition in flat mode and end up in the CFS target's
 catch-all file packets (`TA_AFFINITY_FILE ... actual packet length` errors); that is a nasa/cfs-cosmos-plugin
 issue (packets without ID items), not something the bundle changes.
+
+Dictionary limits become `LIMITS DEFAULT 1 ENABLED <red_low> <yellow_low> <yellow_high> <red_high>`: bounds the
+dictionary leaves out are open (`-1e308` / `1e308` for a missing red bound; a missing yellow bound equals the red
+one, so a yellow-only dictionary limit never shows red), so a channel whose only bound is a red high stays GREEN
+at 0. Two COSMOS/F Prime differences are not papered over: COSMOS counts the bound itself as out of limits
+(`value <= red_low` is RED_LOW, `value >= red_high` is RED_HIGH) where fprime-gds treats the bound as in range,
+and COSMOS rejects a definition whose yellow band is empty on both sides (`low_red == high_red`).
 
 Upgrading the generator can change the shared runtime files (`protocol_fprime_channel_splitter.rb`,
 `protocol_ccsds_checksum_compat.rb`, the compatibility helpers); re-run the merge with `--force` so they are
@@ -202,7 +215,8 @@ depends on (`cfs_cosmos` builds them all). Extra generator flags: cache variable
 fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin"
                         # INTERFACE CFS_INTF          # as --interface; only needed with several INTERFACE lines
                         # DEPLOYMENTS FPrimeDeployment  # default: every flag file
-                        # MANUAL NO_FORCE SKIP_TARGET DRY_RUN ALL  RESERVED_MANIFEST a.json b.json
+                        # MANUAL NO_FORCE SKIP_TARGET DRY_RUN ALL NO_INHERIT_IGNORES NO_COMPAT_HELPERS
+                        # RESERVED_MANIFEST a.json b.json
                         )
 ```
 

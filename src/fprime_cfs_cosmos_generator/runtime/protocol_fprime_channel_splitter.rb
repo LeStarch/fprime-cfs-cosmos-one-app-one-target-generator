@@ -17,7 +17,8 @@ require 'openc3/utilities/logger'
 module OpenC3
   class ProtocolFprimeChannelSplitter < Protocol
     MINIMUM_PREFIX_BYTES = 2 # at least the stream id
-    LENGTH_OFFSET = 4
+    LENGTH_ITEM = 'CCSDS_LENGTH'.freeze
+    DEFAULT_LENGTH_OFFSET = 4 # CCSDS primary header, when the definition has no CCSDS_LENGTH item
     DESCRIPTOR_ITEM = 'FPRIME_DESCRIPTOR'.freeze
     CHANNEL_ID_ITEM = 'FPRIME_CHANNEL_ID'.freeze
 
@@ -50,7 +51,7 @@ module OpenC3
 
     private
 
-    # { stream_id => { prefix_bytes:, id_bytes:, channels: { channel_id => Packet } } }
+    # { stream_id => { prefix_bytes:, id_bytes:, length_offset:, channels: { channel_id => Packet } } }
     def table
       return @table if @table
       @table = {}
@@ -65,9 +66,17 @@ module OpenC3
           channel = packet.get_item(CHANNEL_ID_ITEM)
           next unless stream && stream.id_value && channel.id_value
           next if channel.bit_offset < 0 || channel.bit_offset % 8 != 0
+          if packet.items.key?(DESCRIPTOR_ITEM)
+            descriptor = packet.get_item(DESCRIPTOR_ITEM)
+            unless descriptor.bit_offset + descriptor.bit_size == channel.bit_offset
+              Logger.warn("ProtocolFprimeChannelSplitter: #{packet.packet_name} does not place #{CHANNEL_ID_ITEM} right after #{DESCRIPTOR_ITEM}; not split")
+              next
+            end
+          end
           entry = @table[stream.id_value] ||= {
             prefix_bytes: channel.bit_offset / 8,
             id_bytes: channel.bit_size / 8,
+            length_offset: packet.items.key?(LENGTH_ITEM) ? packet.get_item(LENGTH_ITEM).bit_offset / 8 : DEFAULT_LENGTH_OFFSET,
             channels: {}
           }
           entry[:channels][channel.id_value] = packet
@@ -106,7 +115,7 @@ module OpenC3
           break
         end
         piece = piece[0, length]
-        piece[LENGTH_OFFSET, 2] = [piece.bytesize - 7].pack('n')
+        piece[entry[:length_offset], 2] = [piece.bytesize - 7].pack('n')
         pieces << piece
         offset += length - entry[:prefix_bytes]
       end

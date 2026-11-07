@@ -10,10 +10,13 @@
 module Ccsds
   CMD_SECONDARY_HEADER_BYTES = 2
 
-  # Message ids arrive as the strings of the generated *_msg_id.rb files ('0x1800') or as Integers.
+  # Message ids arrive as the strings of the generated *_msg_id.rb files ('0x1800') or as Integers; prefixed
+  # strings are read like the Python side does (int(mid, 0)), so '0x1800' and '6144' mean the same id.
   def self.resolve(mid)
     return mid if mid.is_a?(Integer)
-    Integer(mid.to_s, 16)
+    Integer(mid.to_s, 0)
+  rescue ArgumentError
+    raise ArgumentError, "cfs_ccsds.rb: message id #{mid.inspect} is not an integer literal (expected e.g. '0x1800')"
   end
 
   def self.cmd(mid, fc, data_len)

@@ -89,6 +89,14 @@ other[4, 2] = [other.bytesize - 7].pack('n')
 wrong = identify(tlm, target, other)
 raise 'other header width decoded as well-formed' if wrong && wrong.read('FPRIME_DESCRIPTOR') == 32
 puts "  other header width (#{HEADER_BYTES == 16 ? 12 : 16} bytes) correctly fails to decode"
+# LIMITS behaviour: a one-sided dictionary "red high" must leave 0 GREEN (no false RED_LOW)
+limited = health.sorted_items.select { |item| item.limits.values && item.limits.values[:DEFAULT] }
+raise 'expected LIMITS items in the Health packet' if limited.empty?
+limited.each { |item| item.limits.enabled = true }
+id.check_limits(:DEFAULT, false)
+states = limited.map { |item| [item.name, id.get_item(item.name).limits.state] }
+puts "  limits at zero: #{states.map { |n, st| "#{n}=#{st}" }.join(' ')}"
+raise 'false limits violation at 0' unless states.all? { |_n, st| st == :GREEN }
 
 # --- telemetry: a channel (MID 0x0801, descriptor 1, channel id of CommandsDispatched)
 chan = tlm.packet(target, 'CfsCore.cmdDisp.CommandsDispatched')
@@ -158,6 +166,14 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   packets_hdr = cfs_hdr(0x0820)
   passthrough, = splitter.read_data(packets_hdr + [32, 1].pack('nn') + ("\0" * 40))
   raise 'non-channel packet must pass through' unless passthrough.bytesize == packets_hdr.bytesize + 44
+  # a channelized packet cut inside the channel id (header + descriptor + 2 of 4 id bytes) passes through untouched
+  short = hdr + [1].pack('n') + [chan_id].pack('N')[0, 2]
+  short[4, 2] = [short.bytesize - 7].pack('n')
+  kept, = splitter.read_data(short)
+  rest, = splitter.read_data('')
+  raise 'short channel packet must pass through' unless kept == short && rest == :STOP
+  one_byte, = splitter.read_data("\x08")
+  raise 'one-byte buffer must pass through' unless one_byte == "\x08"
 end
 
 # --- command: NO_OP_STRING then checksum protocol

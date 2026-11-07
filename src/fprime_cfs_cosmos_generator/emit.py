@@ -174,7 +174,8 @@ def _channel_modifiers(channel: ChTemplate, item: CosmosItem) -> list[str]:
     if item.data_type in ("INT", "UINT", "FLOAT") and any(bound is not None for bound in bounds):
         # COSMOS evaluates limits with <= / >= against these exact values, so an unspecified bound must not be
         # the type's representable minimum/maximum (a one-sided "red high" would flag 0 as RED_LOW). A missing
-        # red bound is open (+/-1e308, beyond every F Prime numeric type); a missing yellow bound equals the red
+        # red bound is open (+/-1e308: beyond every F Prime integer type and all but the top of the F64 range); a
+        # missing yellow bound equals the red
         # one, so the yellow band is empty and values beyond the dictionary's only bound get that bound's color.
         red_low, yellow_low, yellow_high, red_high = (None if bound is None else number(bound) for bound in bounds)
         red_low = OPEN_LOW if red_low is None else red_low

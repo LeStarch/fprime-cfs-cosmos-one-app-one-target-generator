@@ -249,17 +249,17 @@ def test_write_protocol_is_declared_before_the_plugin_write_protocols(two_bundle
         "    PROTOCOL WRITE ProtocolCcsdsChecksum\n    PROTOCOL WRITE ProtocolCcsdsLength\n"
         "    PROTOCOL READ LengthProtocol",
     )
-    text, additions, _name = merge.merge_plugin_text(plugin, [merge.load_bundle(p) for p in two_bundles], None)
-    block = [line.strip() for line in text.splitlines() if line.startswith("    ")]
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(p) for p in two_bundles], None)
+    block = [line.strip() for line in result.text.splitlines() if line.startswith("    ")]
     assert block.index("PROTOCOL WRITE ProtocolCcsdsChecksumCompat") < block.index(
         "PROTOCOL WRITE ProtocolCcsdsChecksum"
     )
     assert block.index("PROTOCOL READ ProtocolFprimeChannelSplitter") > block.index(
         "PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil"
     )
-    assert "    PROTOCOL WRITE ProtocolCcsdsChecksumCompat" in additions
-    again, additions, _name = merge.merge_plugin_text(text, [merge.load_bundle(p) for p in two_bundles], None)
-    assert again == text and additions == []
+    assert "    PROTOCOL WRITE ProtocolCcsdsChecksumCompat" in result.additions
+    again = merge.merge_plugin_text(result.text, [merge.load_bundle(p) for p in two_bundles], None)
+    assert again.text == result.text and again.additions == []
 
 
 def test_misplaced_write_protocol_from_an_older_merge_is_moved(two_bundles):
@@ -269,26 +269,44 @@ def test_misplaced_write_protocol_from_an_older_merge_is_moved(two_bundles):
         "    MAP_TARGET <%= fprime_app_a_target_name %>\n    PROTOCOL WRITE ProtocolCcsdsChecksumCompat\n"
         "    PROTOCOL READ ProtocolFprimeChannelSplitter",
     )
-    text, additions, _name = merge.merge_plugin_text(plugin, [merge.load_bundle(p) for p in two_bundles], None)
-    block = [line.strip() for line in text.splitlines() if line.startswith("    ")]
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(p) for p in two_bundles], None)
+    block = [line.strip() for line in result.text.splitlines() if line.startswith("    ")]
     assert block.count("PROTOCOL WRITE ProtocolCcsdsChecksumCompat") == 1
     assert block.index("PROTOCOL WRITE ProtocolCcsdsChecksumCompat") < block.index("PROTOCOL WRITE ProtocolCcsdsLength")
-    assert additions
+    assert result.additions
 
 
 NASA_PLUGIN = textwrap.dedent(
     """\
     <% require 'cfs_packet_headers' %>
+    <% require 'cfs_globals' %>
     VARIABLE cfs_endianness LITTLE_ENDIAN
+    <% cfs_globals_set_endianness(cfs_endianness) %>
+
+    # This should map to the IP address that GSW sends commands to (and listens to telemetry on)
     VARIABLE cfs_1_intf_ip 172.17.0.1
+    VARIABLE cfs_2_intf_ip 172.17.0.1
 
     <% (1..$cfs_fleet_globals_num_cfs_targets).each do |cfs_cpu_index| %>
 
+        # Declare a new instance of the CFS target
         TARGET CFS <%= cfs_target_name_from_cpu_num(cfs_cpu_index) %>
 
+        # Select the appropriate IP config input variable (declared above) for this cpu number
+        <% if cfs_cpu_index == 1 %>
+            <% current_cfs_intf_ip = cfs_1_intf_ip %>
+        <% elsif cfs_cpu_index == 2 %>
+            <% current_cfs_intf_ip = cfs_2_intf_ip %>
+        <% else %>
+            # This line should cause a plugin compilation error
+            <% current_cfs_intf_ip = error %>
+        <% end %>
+
+        # Set up the FSW cmd/tlm interface
         INTERFACE CFS-<%= cfs_cpu_index %>_INTF udp_interface.rb &
                 <%= current_cfs_intf_ip %> &
                 <%= cfs_get_port_num_cmd(cfs_cpu_index) %> &
+                <%= cfs_get_port_num_tlm(cfs_cpu_index) %> &
                 nil nil 128 nil nil
             MAP_TARGET <%= cfs_target_name_from_cpu_num(cfs_cpu_index) %>
             PROTOCOL WRITE ProtocolCcsdsChecksum
@@ -297,6 +315,7 @@ NASA_PLUGIN = textwrap.dedent(
             PROTOCOL READ ProtocolEvsLog
     <% end %>
 
+    # Instantiate one "fleet" target
     TARGET CFS_FLEET CFS_FLEET
     """
 )
@@ -388,23 +407,82 @@ def test_interface_inside_an_erb_loop_warns(two_bundles, nasa_plugin):
     warning = report.warnings[0]
     assert "<% (1..$cfs_fleet_globals_num_cfs_targets).each do |cfs_cpu_index| %>" in warning
     assert "APP_A, APP_B" in warning and "INTERFACE CFS-<%= cfs_cpu_index %>_INTF" in warning
-    assert f"WARNING   {warning}" in report.summary()
+    assert "WARNING" not in report.summary()  # the CLI prints warnings once, on stderr
     text = (nasa_plugin / "plugin.txt").read_text()
     block = _interface_block(text)
-    assert block[:5] == [
+    assert block[:6] == [
         "<%= current_cfs_intf_ip %> &",
         "<%= cfs_get_port_num_cmd(cfs_cpu_index) %> &",
+        "<%= cfs_get_port_num_tlm(cfs_cpu_index) %> &",
         "nil nil 128 nil nil",
         "MAP_TARGET <%= fprime_app_a_target_name %>",
         "MAP_TARGET <%= fprime_app_b_target_name %>",
     ]
-    assert block[5] == "MAP_TARGET <%= cfs_target_name_from_cpu_num(cfs_cpu_index) %>"
+    assert block[6] == "MAP_TARGET <%= cfs_target_name_from_cpu_num(cfs_cpu_index) %>"
     assert "        MAP_TARGET <%= fprime_app_a_target_name %>" in text  # indented like the plugin's own mapping
     # TARGET lines land before the loop, after the VARIABLEs
-    assert text.index("VARIABLE cfs_1_intf_ip") < text.index("TARGET APP_A") < text.index("<% (1..")
+    assert text.index("VARIABLE cfs_2_intf_ip") < text.index("TARGET APP_A") < text.index("<% (1..")
     again = merge.merge(nasa_plugin, list(two_bundles))
     assert again.copied == [] and again.plugin_additions == [] and again.plugin_moves == []
     assert (nasa_plugin / "plugin.txt").read_text() == text
+
+
+def test_loop_is_found_behind_a_nested_erb_if(two_bundles):
+    plugin = NASA_PLUGIN.replace(
+        "    TARGET CFS <%= cfs_target_name_from_cpu_num(cfs_cpu_index) %>\n",
+        "    TARGET CFS <%= cfs_target_name_from_cpu_num(cfs_cpu_index) %>\n<% if cfs_cpu_index == 1 %>\n",
+    ).replace("\n<% end %>\n\n# Instantiate", "\n<% end %>\n<% end %>\n\n# Instantiate")
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    assert len(result.warnings) == 1 and "(1..$cfs_fleet_globals_num_cfs_targets).each" in result.warnings[0]
+    assert result.text.index("TARGET APP_A") < result.text.index("<% (1..")
+
+
+@pytest.mark.parametrize(
+    ("opener", "warns"),
+    [
+        ("<% targets.map do |t| %>", True),
+        ("<% (1..n).each_slice(1) do |group| %>", True),
+        ("<% 3.times { %>", True),
+        ("<% for cpu in cpus %>", True),
+        ("<%# notes for each cpu %>", False),
+        ("<% if cfs_fleet_globals_each_enabled %>", False),
+        ("<% [1].each do |i| %>\n<% end %>\n<% if true %>", False),  # a loop that closed before the block
+    ],
+)
+def test_erb_loop_detection_shapes(two_bundles, opener, warns):
+    plugin = PLUGIN.replace(
+        "<% include_tlm = true %>\nINTERFACE CFS_INTF udp_interface.rb host 1234 1235 nil nil 128 10.0 nil\n"
+        "    MAP_TARGET TO\n    MAP_TARGET SCH\n    PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil\n",
+        f"{opener}\n    INTERFACE CFS_INTF udp_interface.rb host 1234 1235 nil nil 128 10.0 nil\n"
+        "        MAP_TARGET TO\n        PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil\n<% end %>\n",
+    )
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    assert bool(result.warnings) == warns, result.warnings
+
+
+def test_map_target_goes_outside_an_erb_guard_around_the_plugin_mapping(two_bundles):
+    plugin = PLUGIN.replace(
+        "    MAP_TARGET TO\n    MAP_TARGET SCH\n",
+        "    <% if include_tlm %>\n    MAP_TARGET TO\n    <% end %>\n    MAP_TARGET SCH\n",
+    )
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    block = _interface_block(result.text)
+    assert block[:3] == ["MAP_TARGET <%= fprime_app_a_target_name %>", "<% if include_tlm %>", "MAP_TARGET TO"]
+    again = merge.merge_plugin_text(result.text, [merge.load_bundle(two_bundles[0])], None)
+    assert again.text == result.text and again.additions == [] and again.moves == []
+
+
+def test_map_cmd_and_tlm_target_lines_anchor_the_bundle_mapping(two_bundles):
+    plugin = PLUGIN.replace("    MAP_TARGET TO\n    MAP_TARGET SCH\n", "    MAP_TLM_TARGET TO\n    MAP_CMD_TARGET TO\n")
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    block = _interface_block(result.text)
+    assert block[:3] == ["MAP_TARGET <%= fprime_app_a_target_name %>", "MAP_TLM_TARGET TO", "MAP_CMD_TARGET TO"]
+
+
+def test_map_target_without_mapping_or_protocol_goes_first(two_bundles):
+    plugin = PLUGIN.replace("    MAP_TARGET TO\n    MAP_TARGET SCH\n", "    OPTION FOO 1\n")
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    assert _interface_block(result.text)[:2] == ["MAP_TARGET <%= fprime_app_a_target_name %>", "OPTION FOO 1"]
 
 
 def test_interface_outside_a_loop_does_not_warn(two_bundles, plugin):
@@ -434,7 +512,7 @@ def test_compat_helpers_are_skipped_without_cfs_packet_headers(two_bundles, plug
     report = merge.merge(plugin, list(two_bundles))
     assert report.compat_skipped is not None and "cfs_packet_headers.rb" in report.compat_skipped
     assert not any((plugin / "lib" / f"{name}.rb").exists() for name in HELPERS)
-    assert len([w for w in report.warnings if "required helper" in w]) == 4  # the plugin provides none of them
+    assert report.warnings == []  # a non-nasa plugin may load its helpers from a gem; nothing to judge
     assert "compat helpers not installed: no cfs_packet_headers.rb" in report.summary()
 
 
@@ -515,12 +593,29 @@ def test_required_helpers_come_from_the_manifests(two_bundles, nasa_plugin):
     bundles = [merge.load_bundle(first), merge.load_bundle(second)]
     assert merge.required_helpers(bundles) == [*HELPERS, "mission_extras"]
     report = merge.merge(nasa_plugin, [first, second])
-    assert [w for w in report.warnings if "mission_extras.rb" in w and "no compatibility version" in w]
+    assert len([w for w in report.warnings if "mission_extras.rb" in w and "no compatibility version" in w]) == 1
     assert all((nasa_plugin / "lib" / f"{name}.rb").is_file() for name in HELPERS)
-    manifest["required_helpers"] = ["../evil"]
-    (second / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(merge.MergeError, match="plain file name"):
-        merge.required_helpers([merge.load_bundle(second)])
+    # a hand-written extra helper does not block installing the packaged four
+    (nasa_plugin / "targets" / "CFS" / "lib" / "mission_extras.rb").write_text("# hand written\n")
+    for name in HELPERS:
+        (nasa_plugin / "lib" / f"{name}.rb").unlink()
+    report = merge.merge(nasa_plugin, [first, second])
+    assert report.compat_skipped is None and report.warnings == [w for w in report.warnings if "ERB loop" in w]
+    assert all((nasa_plugin / "lib" / f"{name}.rb").is_file() for name in HELPERS)
+    (nasa_plugin / "targets" / "CFS" / "lib" / "mission_extras.rb").unlink()
+    # a complete hand-written set plus a helper nobody packages is a warning, not a partial-set error
+    for name in HELPERS:
+        (nasa_plugin / "lib" / f"{name}.rb").write_text(f"# hand written {name}\n")
+    report = merge.merge(nasa_plugin, [first, second], force=True)
+    assert report.compat_skipped.startswith("hand-written helpers present")
+    assert [w for w in report.warnings if "mission_extras.rb" in w]
+    (nasa_plugin / "targets" / "CFS" / "lib" / "mission_extras.rb").write_text("# hand written\n")
+    assert not [w for w in merge.merge(nasa_plugin, [first, second]).warnings if "mission_extras.rb" in w]
+    for bad in (["../evil"], "cfs_ccsds", None, [1]):
+        manifest["required_helpers"] = bad
+        (second / "manifest.json").write_text(json.dumps(manifest))
+        with pytest.raises(merge.MergeError, match="plain file name|list of helper names"):
+            merge.required_helpers([merge.load_bundle(second)])
 
 
 def test_cli_no_compat_helpers_flag(two_bundles, nasa_plugin, capsys):
@@ -530,7 +625,8 @@ def test_cli_no_compat_helpers_flag(two_bundles, nasa_plugin, capsys):
     assert not (nasa_plugin / "lib" / "cfs_ccsds.rb").exists()
     out = capsys.readouterr()
     assert "compat helpers not installed: --no-compat-helpers" in out.out
-    assert "[WARNING]" in out.err and "ERB loop" in out.err
+    assert out.err.count("[WARNING]") == 5 and "ERB loop" in out.err  # loop + four missing helpers, once each
+    assert "WARNING" not in out.out
 
 
 def test_packaged_compat_helpers_are_stamped_and_complete():
