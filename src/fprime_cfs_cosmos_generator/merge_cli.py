@@ -37,6 +37,12 @@ def parser() -> argparse.ArgumentParser:
         help="Do not copy the plugin targets' IGNORE_PARAMETER/IGNORE_ITEM lines into the F Prime target.txt",
     )
     result.add_argument(
+        "--no-compat-helpers",
+        action="store_true",
+        help="Do not install the packaged global_defs/cfs_ccsds/fsw_msg_id/fsw_config_param helpers into a "
+        "nasa/cfs-cosmos-plugin style tree (existing generated copies are left as they are)",
+    )
+    result.add_argument(
         "--skip-target",
         action="store_true",
         help="Do not insert TARGET lines (the plugin declares targets itself, e.g. from a directory loop)",
@@ -56,10 +62,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.dry_run,
             arguments.skip_target,
             inherit_ignores=not arguments.no_inherit_ignores,
+            compat_helpers=not arguments.no_compat_helpers,
         )
     except (MergeError, OSError, ValueError, KeyError) as error:
         print(f"[ERROR] {error}", file=sys.stderr)
         return 1
+    for warning in report.warnings:
+        print(f"[WARNING] {warning}", file=sys.stderr)
     print(("DRY RUN\n" if arguments.dry_run else "") + report.summary())
     return 0
 

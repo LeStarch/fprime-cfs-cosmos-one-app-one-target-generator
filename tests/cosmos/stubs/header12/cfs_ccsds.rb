@@ -1,4 +1,5 @@
-# Test stub reproducing the inline header contract described by the package owner
+# Test stub: 12-byte (cFE 6 style) telemetry header flavour of the Ccsds helper; the default run uses the shipped
+# runtime/compat/cfs_ccsds.rb (cFE 7, 16-byte header with SPARE_FOR_64_ALIGN)
 require 'erb'
 module Ccsds
   CMD_HDR = %q{

@@ -5,8 +5,10 @@
 # splits such a packet into one packet per record, each carrying a copy of the cFS header (with its own
 # CCSDS_LENGTH) and the F Prime descriptor, and hands them out one at a time (Interface#read drains pending
 # data through the blank read). Record lengths are measured with the channel's own COSMOS definition, so
-# variable-length (string) channels split correctly. Works on every COSMOS 6.x. Packets whose stream id is
-# not a channelized F Prime MID pass through untouched.
+# variable-length (string) channels split correctly. The copied prefix (cFS header + descriptor) is measured
+# from the channel definition itself (byte offset of FPRIME_CHANNEL_ID), so it follows whatever header the
+# plugin's Ccsds.tlm helper emits (12-byte cFE 6 or 16-byte cFE 7 telemetry headers). Works on every COSMOS
+# 6.x. Packets whose stream id is not a channelized F Prime MID pass through untouched.
 #
 #   PROTOCOL READ ProtocolFprimeChannelSplitter [stream_id_item]   (default CCSDS_STREAMID)
 require 'openc3/interfaces/protocols/protocol'
@@ -14,7 +16,7 @@ require 'openc3/utilities/logger'
 
 module OpenC3
   class ProtocolFprimeChannelSplitter < Protocol
-    CFS_TLM_HEADER_BYTES = 12
+    MINIMUM_PREFIX_BYTES = 2 # at least the stream id
     LENGTH_OFFSET = 4
     DESCRIPTOR_ITEM = 'FPRIME_DESCRIPTOR'.freeze
     CHANNEL_ID_ITEM = 'FPRIME_CHANNEL_ID'.freeze
@@ -62,9 +64,9 @@ module OpenC3
           stream = stream_id_item(packet)
           channel = packet.get_item(CHANNEL_ID_ITEM)
           next unless stream && stream.id_value && channel.id_value
-          descriptor_bytes = packet.items.key?(DESCRIPTOR_ITEM) ? packet.get_item(DESCRIPTOR_ITEM).bit_size / 8 : 0
+          next if channel.bit_offset < 0 || channel.bit_offset % 8 != 0
           entry = @table[stream.id_value] ||= {
-            prefix_bytes: CFS_TLM_HEADER_BYTES + descriptor_bytes,
+            prefix_bytes: channel.bit_offset / 8,
             id_bytes: channel.bit_size / 8,
             channels: {}
           }
@@ -83,9 +85,10 @@ module OpenC3
     end
 
     def split(data)
-      return nil if data.length < CFS_TLM_HEADER_BYTES + 2
+      return nil if data.length < MINIMUM_PREFIX_BYTES
       entry = table[data[0, 2].unpack1('n')]
       return nil unless entry
+      return nil if data.length < entry[:prefix_bytes] + entry[:id_bytes]
       prefix = data[0, entry[:prefix_bytes]]
       offset = entry[:prefix_bytes]
       pieces = []

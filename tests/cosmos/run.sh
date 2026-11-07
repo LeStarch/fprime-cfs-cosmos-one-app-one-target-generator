@@ -1,9 +1,26 @@
 #!/usr/bin/env bash
-# Load a generated bundle into the real openc3 gem (COSMOS 6.9.1 by default) without a running COSMOS:
-# parses the ERB cmd/tlm definitions against stub cFS helpers, identifies a packet and a channel, builds a
-# command and checks the checksum protocol. Usage: tests/cosmos/run.sh <bundle_dir> <TARGET> [cosmos_version]
+# Load a generated bundle into the real openc3 gem (COSMOS 7.5.1 by default) without a running COSMOS:
+# renders the ERB cmd/tlm definitions with the shipped nasa/cfs-cosmos-plugin compatibility helpers
+# (runtime/compat: cFE 7 16-byte telemetry header), identifies packets and channels, runs the channel
+# splitter and builds a command through the checksum protocol.
+#   tests/cosmos/run.sh <bundle_dir> <TARGET> [cosmos_version] [--header12] [--nasa <cfs-cosmos-plugin dir>]
+#   --header12  render with the 12-byte header stub (tests/cosmos/stubs/header12) instead of the shipped helper
+#   --nasa DIR  also compare the shipped helpers' header items with DIR/targets/CFS/lib/cfs_packet_headers.rb
 set -euo pipefail
-bundle=$(realpath "$1"); target=$2; version=${3:-6.9.1}
+bundle=$(realpath "$1"); target=$2; shift 2
+version=7.5.1; flavour=header16; nasa=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --header12) flavour=header12 ;;
+    --nasa) nasa=$(realpath "$2"); shift ;;
+    *) version=$1 ;;
+  esac
+  shift
+done
 here=$(cd "$(dirname "$0")" && pwd)
-docker run --rm -v "$bundle:/b:ro" -v "$here/stubs:/stubs:ro" -v "$here/load_test.rb:/load_test.rb:ro" \
-  "openc3inc/openc3-cosmos-cmd-tlm-api:$version" ruby /load_test.rb /b "$target" 2>&1 | grep -v 'gems/redis\|gems/connection_pool\|store_queued.rb\|store_autoload.rb\|^\s*from /usr/lib/ruby'
+compat=$(cd "$here/../../src/fprime_cfs_cosmos_generator/runtime/compat" && pwd)
+mounts=(-v "$bundle:/b:ro" -v "$here/stubs:/stubs:ro" -v "$compat:/compat:ro" -v "$here/load_test.rb:/load_test.rb:ro")
+[ -n "$nasa" ] && mounts+=(-v "$nasa:/nasa:ro")
+docker run --rm "${mounts[@]}" "openc3inc/openc3-cosmos-cmd-tlm-api:$version" \
+  ruby /load_test.rb /b "$target" "$flavour" "${nasa:+/nasa}" 2>&1 \
+  | grep -v 'gems/redis\|gems/connection_pool\|store_queued.rb\|store_autoload.rb\|^\s*from /usr/lib/ruby'
