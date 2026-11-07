@@ -447,6 +447,9 @@ def test_loop_is_found_behind_a_nested_erb_if(two_bundles):
         ("<%# notes for each cpu %>", False),
         ("<% if cfs_fleet_globals_each_enabled %>", False),
         ("<% [1].each do |i| %>\n<% end %>\n<% if true %>", False),  # a loop that closed before the block
+        ("<% if mode == 'for' %>", False),
+        ("<% xs = ys.map do |y| y end %>\n<% if true %>", False),  # opens and closes on one line
+        ("<% (1..n).each do |i| %>\n# a column-0 comment inside the loop", True),
     ],
 )
 def test_erb_loop_detection_shapes(two_bundles, opener, warns):
@@ -458,6 +461,47 @@ def test_erb_loop_detection_shapes(two_bundles, opener, warns):
     )
     result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
     assert bool(result.warnings) == warns, result.warnings
+
+
+def test_unindented_loop_body_is_detected(two_bundles):
+    plugin = PLUGIN.replace(
+        "<% include_tlm = true %>\nINTERFACE CFS_INTF udp_interface.rb host 1234 1235 nil nil 128 10.0 nil\n"
+        "    MAP_TARGET TO\n    MAP_TARGET SCH\n    PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil\n",
+        "<% [1].each do |i| %>\nINTERFACE CFS_INTF udp_interface.rb host 1234 1235 nil nil 128 10.0 nil\n"
+        "    MAP_TARGET TO\n<% end %>\n",
+    )
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    assert len(result.warnings) == 1
+    assert result.text.index("TARGET APP_A") < result.text.index("<% [1].each")
+
+
+def test_target_goes_before_the_outermost_block_without_variables(two_bundles):
+    plugin = NASA_PLUGIN.replace("VARIABLE cfs_endianness LITTLE_ENDIAN\n", "").replace(
+        "VARIABLE cfs_1_intf_ip 172.17.0.1\nVARIABLE cfs_2_intf_ip 172.17.0.1\n", ""
+    )
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    assert result.text.index("TARGET APP_A") < result.text.index("<% (1..")
+
+
+def test_bundle_lines_stay_outside_a_closed_block_before_the_plugin_mapping(two_bundles):
+    plugin = PLUGIN.replace(
+        "    MAP_TARGET TO\n    MAP_TARGET SCH\n    PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil\n",
+        "    <% if debug %>\n    OPTION LOG true\n    <% end %>\n    MAP_TARGET TO\n"
+        "    <% if cfs_eds_enabled %> # eds\n    PROTOCOL READ LengthProtocol 32 16 7 1 BIG_ENDIAN 0 nil\n"
+        "    <% end %>\n",
+    )
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    block = _interface_block(result.text)
+    assert block[:5] == [
+        "<% if debug %>",
+        "OPTION LOG true",
+        "<% end %>",
+        "MAP_TARGET <%= fprime_app_a_target_name %>",
+        "MAP_TARGET TO",
+    ]
+    assert block[5:7] == ["PROTOCOL WRITE ProtocolCcsdsChecksumCompat", "<% if cfs_eds_enabled %> # eds"]
+    again = merge.merge_plugin_text(result.text, [merge.load_bundle(two_bundles[0])], None)
+    assert again.text == result.text and again.additions == [] and again.moves == []
 
 
 def test_map_target_goes_outside_an_erb_guard_around_the_plugin_mapping(two_bundles):
@@ -473,10 +517,13 @@ def test_map_target_goes_outside_an_erb_guard_around_the_plugin_mapping(two_bund
 
 
 def test_map_cmd_and_tlm_target_lines_anchor_the_bundle_mapping(two_bundles):
-    plugin = PLUGIN.replace("    MAP_TARGET TO\n    MAP_TARGET SCH\n", "    MAP_TLM_TARGET TO\n    MAP_CMD_TARGET TO\n")
+    plugin = PLUGIN.replace(
+        "    MAP_TARGET TO\n    MAP_TARGET SCH\n", "      MAP_TLM_TARGET TO\n      MAP_CMD_TARGET TO\n"
+    )
     result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
     block = _interface_block(result.text)
     assert block[:3] == ["MAP_TARGET <%= fprime_app_a_target_name %>", "MAP_TLM_TARGET TO", "MAP_CMD_TARGET TO"]
+    assert "      MAP_TARGET <%= fprime_app_a_target_name %>" in result.text  # indented like the plugin's mappings
 
 
 def test_map_target_without_mapping_or_protocol_goes_first(two_bundles):

@@ -28,10 +28,9 @@ MANIFEST_FILE = "manifest.json"
 PLUGIN_FILE = "plugin.txt"
 INTERFACE_LINE = re.compile(r"^(?P<indent>\s*)INTERFACE\s+(?P<name>(?:<%.*?%>|\S)+)")
 ERB_LOOP_LINE = re.compile(
-    r"<%(?![=#])[^%]*?(?:\.\w+[?!]?(?:\([^)]*\))?\s*(?:do\b|\{)|\b(?:for|while|until|loop)\b)"
+    r"<%(?![=#])[^%]*?\.\w+[?!]?(?:\([^)]*\))?\s*(?:do\b|\{)|^<%(?![=#])-?\s*(?:for|while|until|loop)\b"
 )
 MAPPING_LINE = re.compile(r"^MAP_(?:CMD_|TLM_)?TARGET\b")
-ERB_CONTROL_LINE = re.compile(r"^<%(?![=#]).*%>$")
 GENERATED_MARKER = "# Generated F Prime cFS"
 MAP_TARGET = "MAP_TARGET "
 BUNDLE_MAP_TARGET = re.compile(r"^MAP_TARGET\s+<%=\s*fprime_[a-z0-9_]+_target_name\s*%>$")
@@ -204,6 +203,9 @@ def select_interface(lines: list[str], name: str | None) -> int:
 def _target_insert_index(lines: list[str], interface_start: int) -> int:
     """TARGET must precede the INTERFACE that maps it (plugin.txt deploys in file order). An indented
     INTERFACE sits inside an ERB block, so insert before the block's top-level opening line instead."""
+    openers = _enclosing_openers(lines, interface_start)
+    if openers:
+        return openers[0]
     if not lines[interface_start][0].isspace():
         return interface_start
     index = interface_start
@@ -219,27 +221,56 @@ ERB_OPENER_LINE = re.compile(
 )
 
 
-def _enclosing_erb_loop(lines: list[str], interface_start: int) -> str | None:
-    """The nearest enclosing ERB loop of an indented INTERFACE: walk upwards over column-0 ERB lines, skipping
-    blocks that already closed (`<% end %>`), until a plain plugin keyword line ends the search"""
-    if not lines[interface_start][0].isspace():
-        return None
+def _self_contained(line: str) -> bool:
+    """An ERB line that opens and closes a block itself (`<% xs = ys.map do |y| y end %>`)"""
+    return bool(ERB_OPENER_LINE.match(line) and re.search(r"\b(?:end|\})\s*-?%>$", line))
+
+
+def _enclosing_openers(lines: list[str], start: int) -> list[int]:
+    """Indices of the column-0 ERB lines that open blocks still unclosed at `start`, outermost first. Walks
+    upwards over blank, indented and comment lines and over blocks that already closed (`<% end %>`); a plain
+    plugin keyword line at column 0 ends the walk."""
     depth = 0
-    for index in range(interface_start - 1, -1, -1):
+    openers: list[int] = []
+    for index in range(start - 1, -1, -1):
         raw = lines[index]
         line = raw.strip()
-        if not line or raw[0].isspace():
+        if not line or raw[0].isspace() or line.startswith("#") or _self_contained(line):
             continue
         if ERB_END_LINE.match(line):
             depth += 1
         elif ERB_OPENER_LINE.match(line):
             if depth > 0:
                 depth -= 1
-            elif ERB_LOOP_LINE.search(line):
-                return line
+            else:
+                openers.append(index)
         elif not line.startswith("<%"):
             break
+    return openers[::-1]
+
+
+def _enclosing_erb_loop(lines: list[str], interface_start: int) -> str | None:
+    """The nearest ERB loop among the blocks enclosing the INTERFACE"""
+    for index in reversed(_enclosing_openers(lines, interface_start)):
+        if ERB_LOOP_LINE.search(lines[index].strip()):
+            return lines[index].strip()
     return None
+
+
+def _outside_open_blocks(body: list[str], index: int) -> int:
+    """Move an insertion index in an INTERFACE body before every ERB block still open at that point, so an
+    inserted line never becomes conditional on a `<% if %>` guarding the plugin's own line"""
+    stack: list[int] = []
+    for position, raw in enumerate(body[:index]):
+        line = raw.strip()
+        if not line.startswith("<%") or line.startswith(("<%=", "<%#")) or _self_contained(line):
+            continue
+        if ERB_END_LINE.match(line):
+            if stack:
+                stack.pop()
+        elif ERB_OPENER_LINE.match(line):
+            stack.append(position)
+    return stack[0] if stack else index
 
 
 def _continuation_count(lines: list[str], start: int, end: int) -> int:
@@ -277,7 +308,7 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
     block = lines[start + 1 : end]
     statement, body = block[:continuation], block[continuation:]
     existing_block = {line.strip() for line in body}
-    sample = next((line for line in body if line.strip().startswith(MAP_TARGET)), None)
+    sample = next((line for line in body if MAPPING_LINE.match(line.strip())), None)
     indent = (
         sample[: len(sample) - len(sample.lstrip())]
         if sample
@@ -306,13 +337,12 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
     existing_maps = [line.strip() for line in body if bundle_map(line)]
     map_group = existing_maps + [line for line in map_targets if line not in existing_maps]
     map_at = next((index for index, line in enumerate(kept) if MAPPING_LINE.match(line.strip())), 0)
-    # an ERB guard (`<% if ... %>`) wrapping the plugin's first mapping must not swallow ours
-    while map_at > 0 and ERB_CONTROL_LINE.match(kept[map_at - 1].strip()):
-        map_at -= 1
+    map_at = _outside_open_blocks(kept, map_at)
     kept = kept[:map_at] + [indent + line for line in map_group] + kept[map_at:]
     # COSMOS runs WRITE protocols in reverse declaration order (Interface#add_protocol unshifts them), so the
     # F Prime protocol that finalizes the CCSDS length/checksum goes before the plugin's own WRITE protocols.
     first_protocol = next((index for index, line in enumerate(kept) if line.strip().startswith("PROTOCOL ")), len(kept))
+    first_protocol = _outside_open_blocks(kept, first_protocol)
     new_body = (
         kept[:first_protocol]
         + [indent + line for line in write_protocols]
@@ -332,9 +362,9 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
         targets = ", ".join(bundle.target for bundle in bundles)
         warnings.append(
             f"{PLUGIN_FILE}: INTERFACE {interface_name} is inside the ERB loop {loop!r}; the MAP_TARGET lines for "
-            f"{targets} render once per iteration, so every interface of the loop maps the F Prime target and "
-            f"COSMOS keeps only the last mapping (F Prime packets on the other interfaces are not identified). Run "
-            f"the loop once (e.g. $cfs_fleet_globals_num_cfs_targets = 1) or map the F Prime target by hand"
+            f"{targets} render once per iteration, so every interface of the loop maps the F Prime target (each "
+            f"identifies its telemetry and forwards its commands). Run the loop once (e.g. "
+            f"$cfs_fleet_globals_num_cfs_targets = 1) or map the F Prime target by hand"
         )
 
     existing_plugin = {line.strip() for line in lines if line and not line[0].isspace()}

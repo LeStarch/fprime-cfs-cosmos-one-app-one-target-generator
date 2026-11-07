@@ -88,9 +88,8 @@ from `lib/` or `targets/<APP>/lib/` can be loaded by that target's microservices
 generated `FPRIME_TIME` item carries the F Prime timestamp.
 
 nasa/cfs-cosmos-plugin's `INTERFACE` sits inside `<% (1..$cfs_fleet_globals_num_cfs_targets).each ... %>`, so the
-merge warns that the inserted `MAP_TARGET` renders once per cFS instance: every interface of the loop maps the
-F Prime target and COSMOS keeps only the last mapping, so F Prime packets arriving on the other interfaces are not
-identified. Set `$cfs_fleet_globals_num_cfs_targets = 1` in `targets/CFS_FLEET/lib/cfs_fleet_globals.rb` (or map
+merge warns that the inserted `MAP_TARGET` renders once per cFS instance: every interface of the loop then maps the
+F Prime target, so each of them identifies F Prime telemetry and forwards F Prime commands. Set `$cfs_fleet_globals_num_cfs_targets = 1` in `targets/CFS_FLEET/lib/cfs_fleet_globals.rb` (or map
 the F Prime targets by hand) before building the plugin; the merge cannot evaluate the Ruby global, so the warning
 is printed either way. With that one edit, nasa/cfs-cosmos-plugin `dev` plus the merged bundle builds and loads
 with no further changes. At load time set `cfs_1_intf_ip` to the address cFS
@@ -250,11 +249,12 @@ dependencies are redundant and harmless.
 - **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
   F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
-`tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>]` loads a bundle into
+`tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte
 telemetry header; `--header12` swaps in the 12-byte header stub of `tests/cosmos/stubs/header12`), identifies a
 packet and a channel, splits a multi-record channel packet, builds a command and checks the checksum protocol;
-`--nasa` additionally compares the helpers' header items with the plugin's `cfs_packet_headers.rb`.
+`--nasa` additionally compares the helpers' header items with the plugin's `cfs_packet_headers.rb`; `--image`
+substitutes an image reference (e.g. digest-pinned) for `openc3inc/openc3-cosmos-cmd-tlm-api:<version>`.
 
 ## Install
 

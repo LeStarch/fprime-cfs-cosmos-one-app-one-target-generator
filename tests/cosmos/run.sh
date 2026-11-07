@@ -8,6 +8,7 @@
 #   --nasa DIR  also compare the shipped helpers' header items with DIR/targets/CFS/lib/cfs_packet_headers.rb
 #   --image REF use this image instead of openc3inc/openc3-cosmos-cmd-tlm-api:<version> (e.g. a digest-pinned ref)
 set -euo pipefail
+[ $# -ge 2 ] || { sed -n '2,9p' "$0" >&2; exit 2; }
 bundle=$(realpath "$1"); target=$2; shift 2
 version=7.5.1; flavour=header16; nasa=""; image=""
 while [ $# -gt 0 ]; do
