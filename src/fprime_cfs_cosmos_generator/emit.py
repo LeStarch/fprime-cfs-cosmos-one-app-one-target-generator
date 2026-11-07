@@ -64,6 +64,9 @@ def identifier(name: str) -> str:
     return name
 
 
+OPEN_LOW, OPEN_HIGH = "-1e308", "1e308"
+
+
 def number(value: float | int) -> str:
     """A numeric literal for LIMITS bounds"""
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -169,15 +172,16 @@ def _channel_modifiers(channel: ChTemplate, item: CosmosItem) -> list[str]:
         modifiers.append(f"FORMAT_STRING {quote(format_str)}")
     bounds = (channel.get_low_red(), channel.get_low_yellow(), channel.get_high_yellow(), channel.get_high_red())
     if item.data_type in ("INT", "UINT", "FLOAT") and any(bound is not None for bound in bounds):
-        if item.data_type == "FLOAT":
-            minimum, maximum = "-1e308", "1e308"
-        else:
-            minimum, maximum = item.value_range()
-        red_low, yellow_low, yellow_high, red_high = bounds
-        red_low = minimum if red_low is None else number(red_low)
-        yellow_low = red_low if yellow_low is None else number(yellow_low)
-        red_high = maximum if red_high is None else number(red_high)
-        yellow_high = red_high if yellow_high is None else number(yellow_high)
+        # COSMOS evaluates limits with <= / >= against these exact values, so an unspecified bound must not be
+        # the type's representable minimum/maximum (a one-sided "red high" would flag 0 as RED_LOW). A missing
+        # red bound is open (+/-1e308: beyond every F Prime integer type and all but the top of the F64 range); a
+        # missing yellow bound equals the red
+        # one, so the yellow band is empty and values beyond the dictionary's only bound get that bound's color.
+        red_low, yellow_low, yellow_high, red_high = (None if bound is None else number(bound) for bound in bounds)
+        red_low = OPEN_LOW if red_low is None else red_low
+        red_high = OPEN_HIGH if red_high is None else red_high
+        yellow_low = red_low if yellow_low is None else yellow_low
+        yellow_high = red_high if yellow_high is None else yellow_high
         modifiers.append(f"LIMITS DEFAULT 1 ENABLED {red_low} {yellow_low} {yellow_high} {red_high}")
     return modifiers
 

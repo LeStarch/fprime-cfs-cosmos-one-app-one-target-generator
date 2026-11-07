@@ -215,5 +215,42 @@ def test_big_endian_covers_scalars_and_arrays_only():
 def test_every_runtime_file_is_stamped_as_generated():
     from fprime_cfs_cosmos_generator import merge
 
-    for path in generator.RUNTIME.iterdir():
-        assert merge._generated(path), path.name
+    files = [path for path in generator.RUNTIME.rglob("*") if path.is_file() and not path.name.endswith(".pyc")]
+    assert len(files) >= 7
+    for path in files:
+        assert path.name.endswith(".rb") and merge._generated(path), path.name
+
+
+def _limits(data_type, bit_size, **bounds):
+    from fprime_gds.common.models.serialize.numerical_types import F64Type, I32Type, U32Type
+    from fprime_gds.common.templates.ch_template import ChTemplate
+
+    from fprime_cfs_cosmos_generator import emit
+    from fprime_cfs_cosmos_generator.items import CosmosItem
+
+    type_object = {"UINT": U32Type, "INT": I32Type, "FLOAT": F64Type}[data_type]
+    channel = ChTemplate(
+        1, "ch", "comp", type_object,
+        low_red=bounds.get("rl"), low_yellow=bounds.get("yl"),
+        high_yellow=bounds.get("yh"), high_red=bounds.get("rh"),
+    )
+    lines = emit._channel_modifiers(channel, CosmosItem("ch", bit_size, data_type))
+    limits = [line for line in lines if line.startswith("LIMITS")]
+    return limits[0].removeprefix("LIMITS DEFAULT 1 ENABLED ") if limits else None
+
+
+@pytest.mark.parametrize(
+    ("data_type", "bit_size", "bounds", "expected"),
+    [
+        ("UINT", 32, {"rh": 1}, "-1e308 -1e308 1 1"),  # one-sided red high must not flag 0 as RED_LOW
+        ("UINT", 8, {"yh": 5}, "-1e308 -1e308 5 1e308"),  # yellow only: above 5 is yellow, never red
+        ("UINT", 16, {"rl": 2}, "2 2 1e308 1e308"),
+        ("INT", 32, {"yl": -3}, "-1e308 -3 1e308 1e308"),
+        ("INT", 16, {"rl": -10, "rh": 10}, "-10 -10 10 10"),
+        ("FLOAT", 64, {"yl": -1.5, "yh": 1.5}, "-1e308 -1.5 1.5 1e308"),
+        ("FLOAT", 32, {"rl": -2.0, "yl": -1.0, "yh": 1.0, "rh": 2.0}, "-2.0 -1.0 1.0 2.0"),
+        ("UINT", 32, {}, None),
+    ],
+)
+def test_limits_leave_unspecified_sides_open(data_type, bit_size, bounds, expected):
+    assert _limits(data_type, bit_size, **bounds) == expected

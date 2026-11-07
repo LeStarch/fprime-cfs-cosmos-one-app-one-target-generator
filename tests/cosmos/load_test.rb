@@ -1,13 +1,52 @@
 # Loads the generated bundle into the real openc3 gem (no server), identifies telemetry, builds a command,
-# and runs the checksum protocol. Usage: ruby load_test.rb <bundle_dir> <TARGET>
+# and runs the checksum protocol. Usage: ruby load_test.rb <bundle_dir> <TARGET> [header16|header12] [nasa_plugin_dir]
+#   header16 (default): the shipped runtime/compat helpers (/compat), cFE 7 16-byte telemetry header
+#   header12: the 12-byte header stub (/stubs/header12) ahead of /compat on the load path
+#   nasa_plugin_dir: compare the shipped helpers' header items with its cfs_packet_headers.rb
 require 'openc3'
 require 'openc3/packets/packet_config'
 require 'openc3/packets/telemetry'
 require 'openc3/packets/commands'
 require 'openc3/system/system'
-bundle, target = ARGV
-$LOAD_PATH.unshift('/stubs', "#{bundle}/lib")
+bundle, target, flavour, nasa = ARGV
+flavour = 'header16' if flavour.nil? || flavour.empty?
+nasa = nil if nasa && nasa.empty?
+$LOAD_PATH.unshift('/compat', '/stubs', "#{bundle}/lib")
+$LOAD_PATH.unshift('/stubs/header12') if flavour == 'header12'
 Dir["#{bundle}/lib/*.rb"].sort.each { |f| require File.basename(f, '.rb') }
+require 'global_defs'
+require 'cfs_ccsds'
+puts "flavour: #{flavour} (Ccsds from #{$LOADED_FEATURES.grep(/cfs_ccsds/).first}) endian=#{Globals::Cfg.processor_endian}"
+raise 'wrong Ccsds helper on the load path' unless $LOADED_FEATURES.grep(/cfs_ccsds/).first.start_with?(flavour == 'header12' ? '/stubs/header12' : '/compat')
+HEADER_BYTES = flavour == 'header12' ? 12 : 16
+# cFS telemetry header: primary header + seconds + subseconds (+ 4 spare bytes on cFE 7)
+def cfs_hdr(mid)
+  hdr = [mid, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
+  hdr += [0].pack('N') if HEADER_BYTES == 16
+  hdr
+end
+
+if nasa
+  # The shipped Ccsds helpers must lay the header out exactly like nasa/cfs-cosmos-plugin's cfs_packet_headers.rb
+  # (APPEND keyword, item name, bit size, type, endianness), ignoring the ID/default values and PACKET_TIME.
+  source = Dir["#{nasa}/targets/*/lib/cfs_packet_headers.rb", "#{nasa}/lib/cfs_packet_headers.rb"].first
+  raise "no cfs_packet_headers.rb under #{nasa}" unless source
+  def header_items(text)
+    text.scan(/(APPEND_\w+)\s+(\w+)\s+(\d+)\s+(\w+)(?:\s+MIN_\w+\s+MAX_\w+)?(?:\s+[^"\s]+)?\s+"[^"]*"\s*(BIG_ENDIAN|LITTLE_ENDIAN)?/)
+        .map { |keyword, name, bits, type, endian| [keyword, name, bits.to_i, type, endian || 'host'] }
+  end
+  nasa_text = File.read(source).delete('\\') # the header lines are Ruby string literals with escaped quotes
+  nasa_cmd = header_items(nasa_text[/def cfs_cmd_hdr.*?^end/m])
+  nasa_tlm = header_items(nasa_text[/def cfs_tlm_hdr.*?^end/m])
+  ours_cmd = header_items(Ccsds.cmd('0x1800', 0, 6))
+  ours_tlm = header_items(Ccsds.tlm('0x0820'))
+  puts "nasa cmd header: #{nasa_cmd.map { |i| i[1] }.join(' ')}"
+  puts "nasa tlm header: #{nasa_tlm.map { |i| i[1] }.join(' ')}"
+  raise "command header differs from nasa: #{ours_cmd.inspect} vs #{nasa_cmd.inspect}" unless ours_cmd == nasa_cmd
+  raise "telemetry header differs from nasa: #{ours_tlm.inspect} vs #{nasa_tlm.inspect}" unless ours_tlm == nasa_tlm
+  raise 'nasa telemetry header is not 16 bytes' unless nasa_tlm.sum { |i| i[2] } == 128
+  puts 'nasa header comparison OK'
+end
 
 config = OpenC3::PacketConfig.new
 Dir["#{bundle}/targets/#{target}/cmd_tlm/*.txt"].sort.each do |f|
@@ -33,7 +72,7 @@ puts "telemetry packets: #{tlm.packets(target).length}"
 puts "command packets: #{cmd.packets(target).length}"
 
 # --- telemetry: Health packet (MID 0x0820, descriptor 32, packet id 1) with cFS header
-hdr = [0x0820, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
+hdr = cfs_hdr(0x0820)
 health = tlm.packet(target, 'Health')
 body = [32, 1, 2, 0, 1000, 500].pack("nnnCNN"); body += ([0] * (health.defined_length - hdr.bytesize - body.bytesize)).pack("C*")
 buf = hdr + body
@@ -42,11 +81,27 @@ id = identify(tlm, target, buf)
 puts "identify Health -> #{id ? id.packet_name : 'nil'}"
 raise 'Health not identified' unless id && id.packet_name == 'HEALTH'
 puts "  CommandsDispatched=#{id.read('CfsCore.cmdDisp.CommandsDispatched')} tlm_time=#{id.read('FPRIME_TIME')}"
+raise 'header width not applied' unless health.get_item('FPRIME_DESCRIPTOR').bit_offset == HEADER_BYTES * 8
+raise 'descriptor misread' unless id.read('FPRIME_DESCRIPTOR') == 32 && id.read('FPRIME_TIME').to_i == 1000
+# a buffer with the other header width must not decode: proves the definition really has this header size
+other = cfs_hdr(0x0820)[0, HEADER_BYTES == 16 ? 12 : 16].ljust(HEADER_BYTES == 16 ? 12 : 16, "\0") + body
+other[4, 2] = [other.bytesize - 7].pack('n')
+wrong = identify(tlm, target, other)
+raise 'other header width decoded as well-formed' if wrong && wrong.read('FPRIME_DESCRIPTOR') == 32
+puts "  other header width (#{HEADER_BYTES == 16 ? 12 : 16} bytes) correctly fails to decode"
+# LIMITS behaviour: a one-sided dictionary "red high" must leave 0 GREEN (no false RED_LOW)
+limited = health.sorted_items.select { |item| item.limits.values && item.limits.values[:DEFAULT] }
+raise 'expected LIMITS items in the Health packet' if limited.empty?
+limited.each { |item| item.limits.enabled = true }
+id.check_limits(:DEFAULT, false)
+states = limited.map { |item| [item.name, id.get_item(item.name).limits.state] }
+puts "  limits at zero: #{states.map { |n, st| "#{n}=#{st}" }.join(' ')}"
+raise 'false limits violation at 0' unless states.all? { |_n, st| st == :GREEN }
 
 # --- telemetry: a channel (MID 0x0801, descriptor 1, channel id of CommandsDispatched)
 chan = tlm.packet(target, 'CfsCore.cmdDisp.CommandsDispatched')
 chan_id = chan.get_item('FPRIME_CHANNEL_ID').id_value
-hdr = [0x0801, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
+hdr = cfs_hdr(0x0801)
 body = [1, chan_id, 2, 0, 1000, 500, 77].pack('nNnCNNN')
 buf = hdr + body
 buf[4, 2] = [buf.bytesize - 7].pack('n')
@@ -74,9 +129,14 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   raise 'split record length wrong' unless first.bytesize == chan.defined_length && second.bytesize == errors.defined_length
   raise 'piece CCSDS_LENGTH wrong' unless first[4, 2].unpack1('n') == first.bytesize - 7 && second[4, 2].unpack1('n') == second.bytesize - 7
   # string channel (variable length) in both orders
+  # the string length field is FwSizeStoreType, whose width comes from the dictionary (16 or 64 bits)
+  def packed_length(packet, item_name, value)
+    bits = packet.get_item(item_name).bit_size
+    [value].pack({ 16 => 'n', 32 => 'N', 64 => 'Q>' }.fetch(bits))
+  end
   version = tlm.packet(target, 'CfsCore.version.FrameworkVersion')
   ver_id = version.get_item('FPRIME_CHANNEL_ID').id_value
-  rec_s = [ver_id, 2, 0, 1002, 502, 6].pack('NnCNNn') + 'v4.3.0'
+  rec_s = [ver_id, 2, 0, 1002, 502].pack('NnCNN') + packed_length(version, 'FrameworkVersion_LENGTH', 6) + 'v4.3.0'
   [[rec_s, rec1], [rec1, rec_s]].each do |order|
     buf = hdr + [1].pack('n') + order.join
     buf[4, 2] = [buf.bytesize - 7].pack('n')
@@ -92,7 +152,8 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   # struct channel with a string in the middle (enum, string, U8 status) followed by a scalar channel
   custom = tlm.packet(target, 'CfsCore.version.CustomVersion01')
   custom_id = custom.get_item('FPRIME_CHANNEL_ID').id_value
-  rec_c = [custom_id, 2, 0, 1003, 503, 7, 5].pack('NnCNNNn') + 'v1.2a' + [2].pack('C')
+  rec_c = [custom_id, 2, 0, 1003, 503, 7].pack('NnCNNN') + packed_length(custom, 'CustomVersion01.version_value_LENGTH', 5) +
+          'v1.2a' + [2].pack('C')
   buf = hdr + [1].pack('n') + rec_c + rec1
   buf[4, 2] = [buf.bytesize - 7].pack('n')
   p1, = splitter.read_data(buf)
@@ -102,9 +163,17 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   c = identify(tlm, target, p1); d = identify(tlm, target, p2)
   puts "splitter struct case -> #{c.packet_name} value=#{c.read('CustomVersion01.version_value')} status=#{c.read('CustomVersion01.version_status')}; #{d.packet_name}=#{d.read('CommandsDispatched')}"
   raise 'struct channel wrong' unless c.read('CustomVersion01.version_value') == 'v1.2a' && c.read('CustomVersion01.version_status') == 2 && d.read('CommandsDispatched') == 77
-  packets_hdr = [0x0820, 0xC000, 0, 0x5F5E100, 0x8000].pack('nnnNn')
+  packets_hdr = cfs_hdr(0x0820)
   passthrough, = splitter.read_data(packets_hdr + [32, 1].pack('nn') + ("\0" * 40))
   raise 'non-channel packet must pass through' unless passthrough.bytesize == packets_hdr.bytesize + 44
+  # a channelized packet cut inside the channel id (header + descriptor + 2 of 4 id bytes) passes through untouched
+  short = hdr + [1].pack('n') + [chan_id].pack('N')[0, 2]
+  short[4, 2] = [short.bytesize - 7].pack('n')
+  kept, = splitter.read_data(short)
+  rest, = splitter.read_data('')
+  raise 'short channel packet must pass through' unless kept == short && rest == :STOP
+  one_byte, = splitter.read_data("\x08")
+  raise 'one-byte buffer must pass through' unless one_byte == "\x08"
 end
 
 # --- command: NO_OP_STRING then checksum protocol
