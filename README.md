@@ -89,7 +89,8 @@ generated `FPRIME_TIME` item carries the F Prime timestamp.
 
 nasa/cfs-cosmos-plugin's `INTERFACE` sits inside `<% (1..$cfs_fleet_globals_num_cfs_targets).each ... %>`, so the
 merge warns that the inserted `MAP_TARGET` renders once per cFS instance: every interface of the loop then maps the
-F Prime target, so each of them identifies F Prime telemetry and forwards F Prime commands. Set `$cfs_fleet_globals_num_cfs_targets = 1` in `targets/CFS_FLEET/lib/cfs_fleet_globals.rb` (or map
+F Prime target, so each interface forwards every F Prime command (one transmission per cFS link) and identifies the
+F Prime telemetry it receives. Set `$cfs_fleet_globals_num_cfs_targets = 1` in `targets/CFS_FLEET/lib/cfs_fleet_globals.rb` (or map
 the F Prime targets by hand) before building the plugin; the merge cannot evaluate the Ruby global, so the warning
 is printed either way. With that one edit, nasa/cfs-cosmos-plugin `dev` plus the merged bundle builds and loads
 with no further changes. At load time set `cfs_1_intf_ip` to the address cFS

@@ -450,6 +450,12 @@ def test_loop_is_found_behind_a_nested_erb_if(two_bundles):
         ("<% if mode == 'for' %>", False),
         ("<% xs = ys.map do |y| y end %>\n<% if true %>", False),  # opens and closes on one line
         ("<% (1..n).each do |i| %>\n# a column-0 comment inside the loop", True),
+        ("<%- (1..n).each do |i| -%>\n<%- if i == 1 -%>\n<%- end -%>", True),  # trim-mode tags
+        ("<% if use_fleet %>\n  <% (1..n).each do |i| %>", True),  # nested, indented loop opener
+        ('<% [1].each do |i| %>\n<% label = "do not edit" %>\n<% end %>\n<% if true %>', False),
+        ("<% [1].each do |i| %>\n<% end %>\n<% # xs.each do |x| x %>", False),  # ERB comment tag
+        ("<% xs = ys.map do |y| y end %> # note\n<% if true %>", False),
+        ("<% (1..n).each do |i| %>\nTARGET CFS CFS_<%= i %>", True),  # unindented body with a keyword first
     ],
 )
 def test_erb_loop_detection_shapes(two_bundles, opener, warns):
@@ -479,8 +485,9 @@ def test_target_goes_before_the_outermost_block_without_variables(two_bundles):
     plugin = NASA_PLUGIN.replace("VARIABLE cfs_endianness LITTLE_ENDIAN\n", "").replace(
         "VARIABLE cfs_1_intf_ip 172.17.0.1\nVARIABLE cfs_2_intf_ip 172.17.0.1\n", ""
     )
+    plugin = plugin.replace("<% (1..", "<% if fleet %>\n<% (1..", 1) + "<% end %>\n"
     result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
-    assert result.text.index("TARGET APP_A") < result.text.index("<% (1..")
+    assert result.text.index("TARGET APP_A") < result.text.index("<% if fleet %>")
 
 
 def test_bundle_lines_stay_outside_a_closed_block_before_the_plugin_mapping(two_bundles):
@@ -502,6 +509,21 @@ def test_bundle_lines_stay_outside_a_closed_block_before_the_plugin_mapping(two_
     assert block[5:7] == ["PROTOCOL WRITE ProtocolCcsdsChecksumCompat", "<% if cfs_eds_enabled %> # eds"]
     again = merge.merge_plugin_text(result.text, [merge.load_bundle(two_bundles[0])], None)
     assert again.text == result.text and again.additions == [] and again.moves == []
+
+
+def test_bundle_mapping_goes_before_the_outermost_open_block_and_ignores_one_liners(two_bundles):
+    plugin = PLUGIN.replace(
+        "    MAP_TARGET TO\n    MAP_TARGET SCH\n",
+        "    <% names = targets.map do |t| t.upcase end %>\n    <% if a %>\n    <% if b %>\n    MAP_TARGET TO\n"
+        "    <% end %>\n    <% end %>\n",
+    )
+    result = merge.merge_plugin_text(plugin, [merge.load_bundle(two_bundles[0])], None)
+    block = _interface_block(result.text)
+    assert block[:3] == [
+        "<% names = targets.map do |t| t.upcase end %>",
+        "MAP_TARGET <%= fprime_app_a_target_name %>",
+        "<% if a %>",
+    ]
 
 
 def test_map_target_goes_outside_an_erb_guard_around_the_plugin_mapping(two_bundles):

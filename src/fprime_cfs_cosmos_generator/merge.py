@@ -216,37 +216,36 @@ def _target_insert_index(lines: list[str], interface_start: int) -> int:
 
 ERB_END_LINE = re.compile(r"^<%-?\s*(?:end\b|\})")
 ERB_OPENER_LINE = re.compile(
-    r"^<%(?![=#])(?!-?\s*(?:end|else|elsif|when)\b).*(?:\bdo\b|\{\s*(?:\|[^|]*\|)?\s*-?%>)"
-    r"|^<%(?![=#])\s*(?:if|unless|case|while|until|for|begin)\b"
+    r"^<%(?![=#])(?!-?\s*(?:end|else|elsif|when)\b).*(?:\bdo\b|\{)\s*(?:\|[^|]*\|)?\s*-?%>"
+    r"|^<%(?![=#])-?\s*(?:if|unless|case|while|until|for|begin)\b"
 )
+ERB_COMMENT_LINE = re.compile(r"^<%-?\s*#")
 
 
 def _self_contained(line: str) -> bool:
     """An ERB line that opens and closes a block itself (`<% xs = ys.map do |y| y end %>`)"""
-    return bool(ERB_OPENER_LINE.match(line) and re.search(r"\b(?:end|\})\s*-?%>$", line))
+    return bool(ERB_OPENER_LINE.match(line) and re.search(r"(?:\bend|\})\s*-?%>(?:\s*#.*)?$", line))
+
+
+def _erb_transparent(line: str) -> bool:
+    """Lines that neither open nor close an ERB block"""
+    return not line or line.startswith("#") or ERB_COMMENT_LINE.match(line) is not None or _self_contained(line)
 
 
 def _enclosing_openers(lines: list[str], start: int) -> list[int]:
-    """Indices of the column-0 ERB lines that open blocks still unclosed at `start`, outermost first. Walks
-    upwards over blank, indented and comment lines and over blocks that already closed (`<% end %>`); a plain
-    plugin keyword line at column 0 ends the walk."""
-    depth = 0
-    openers: list[int] = []
-    for index in range(start - 1, -1, -1):
-        raw = lines[index]
-        line = raw.strip()
-        if not line or raw[0].isspace() or line.startswith("#") or _self_contained(line):
+    """Indices of the ERB lines that open blocks still unclosed at `start`, outermost first (blocks that already
+    closed with `<% end %>` and comment lines are transparent, whatever their indentation)"""
+    stack: list[int] = []
+    for index in range(start):
+        line = lines[index].strip()
+        if not line.startswith("<%") or _erb_transparent(line):
             continue
         if ERB_END_LINE.match(line):
-            depth += 1
+            if stack:
+                stack.pop()
         elif ERB_OPENER_LINE.match(line):
-            if depth > 0:
-                depth -= 1
-            else:
-                openers.append(index)
-        elif not line.startswith("<%"):
-            break
-    return openers[::-1]
+            stack.append(index)
+    return stack
 
 
 def _enclosing_erb_loop(lines: list[str], interface_start: int) -> str | None:
@@ -260,17 +259,8 @@ def _enclosing_erb_loop(lines: list[str], interface_start: int) -> str | None:
 def _outside_open_blocks(body: list[str], index: int) -> int:
     """Move an insertion index in an INTERFACE body before every ERB block still open at that point, so an
     inserted line never becomes conditional on a `<% if %>` guarding the plugin's own line"""
-    stack: list[int] = []
-    for position, raw in enumerate(body[:index]):
-        line = raw.strip()
-        if not line.startswith("<%") or line.startswith(("<%=", "<%#")) or _self_contained(line):
-            continue
-        if ERB_END_LINE.match(line):
-            if stack:
-                stack.pop()
-        elif ERB_OPENER_LINE.match(line):
-            stack.append(position)
-    return stack[0] if stack else index
+    openers = _enclosing_openers(body, index)
+    return openers[0] if openers else index
 
 
 def _continuation_count(lines: list[str], start: int, end: int) -> int:
@@ -327,6 +317,7 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
                 bucket = others
             if line not in bucket:
                 bucket.append(line)
+
     # Bundle MAP_TARGET lines go before the plugin's own: nasa/cfs-cosmos-plugin's file packets have no ID items,
     # so a CFS target mapped first identifies (and swallows) every F Prime packet. Existing bundle mappings keep
     # their relative order, new ones follow them.
@@ -363,7 +354,8 @@ def merge_plugin_text(text: str, bundles: list[Bundle], interface: str | None, s
         warnings.append(
             f"{PLUGIN_FILE}: INTERFACE {interface_name} is inside the ERB loop {loop!r}; the MAP_TARGET lines for "
             f"{targets} render once per iteration, so every interface of the loop maps the F Prime target (each "
-            f"identifies its telemetry and forwards its commands). Run the loop once (e.g. "
+            f"forwards every F Prime command, one transmission per cFS link, and identifies the F Prime telemetry "
+            f"it receives). Run the loop once (e.g. "
             f"$cfs_fleet_globals_num_cfs_targets = 1) or map the F Prime target by hand"
         )
 
