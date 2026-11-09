@@ -98,6 +98,10 @@ class PluginText:
     moves: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
+    def __iter__(self):
+        """Unpack as the (text, additions, interface) tuple merge_plugin_text() returned before 'moves'/'warnings'"""
+        return iter((self.text, self.additions, self.interface))
+
 
 def _bundle_files(manifest: dict, directory: Path) -> list[str]:
     """Manifest-listed files, restricted to the bundle's own targets/<T> and lib/*.rb"""

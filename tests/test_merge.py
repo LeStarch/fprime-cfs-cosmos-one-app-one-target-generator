@@ -703,3 +703,11 @@ def test_packaged_compat_helpers_are_stamped_and_complete():
     assert names == sorted(f"{name}.rb" for name in HELPERS)
     for path in merge.COMPAT_RUNTIME.iterdir():
         assert path.read_text().startswith(merge.GENERATED_MARKER), path.name
+
+
+def test_plugin_text_unpacks_as_the_legacy_tuple(two_bundles, plugin):
+    bundles = [merge.load_bundle(p) for p in two_bundles]
+    result = merge.merge_plugin_text(PLUGIN, bundles, None)
+    text, additions, interface = result
+    assert (text, additions, interface) == (result.text, result.additions, result.interface)
+    assert "fprime_app_a_target_name" in text and additions and interface == "CFS_INTF"
