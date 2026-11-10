@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Load a generated bundle into the real openc3 gem (COSMOS 7.5.1 by default) without a running COSMOS:
 # renders the ERB cmd/tlm definitions with the shipped nasa/cfs-cosmos-plugin compatibility helpers
-# (runtime/compat: cFE 7 16-byte telemetry header), identifies packets and channels, runs the channel
-# splitter and builds a command through the checksum protocol.
+# (runtime/compat: cFE 7 16-byte telemetry header), identifies packets, channels and (when the bundle has it)
+# the FPRIME_EVENTS packet, runs the channel splitter and builds a command through the checksum protocol.
 #   tests/cosmos/run.sh <bundle_dir> <TARGET> [cosmos_version] [--header12] [--nasa <cfs-cosmos-plugin dir>] [--image REF]
 #   --header12  render with the 12-byte header stub (tests/cosmos/stubs/header12) instead of the shipped helper
 #   --nasa DIR  also compare the shipped helpers' header items with DIR/targets/CFS/lib/cfs_packet_headers.rb

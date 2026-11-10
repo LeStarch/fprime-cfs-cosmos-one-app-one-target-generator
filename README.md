@@ -243,7 +243,8 @@ dependencies are redundant and harmless.
 
 - **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the
   `Ccsds.tlm` header plus `FPRIME_DESCRIPTOR`/`FPRIME_PACKET_ID` (or `FPRIME_CHANNEL_ID`) ID items.
-  Works on every COSMOS 6.x. `TlmPacketizer` packets arrive one per CCSDS packet. `TlmChan` packs several
+  Works on every COSMOS 6.x: `target.txt` sets `TLM_UNIQUE_ID_MODE`, which COSMOS < 6.10 needs to identify packets
+  whose ID items differ (6.10+ detects it and ignores the keyword). `TlmPacketizer` packets arrive one per CCSDS packet. `TlmChan` packs several
   channel records into one CCSDS packet, so the bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
   protocol (wired by the fragment) that splits such a packet into one COSMOS packet per record, each with a
   copy of the cFS header and descriptor.

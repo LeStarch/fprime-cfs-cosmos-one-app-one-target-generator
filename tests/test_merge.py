@@ -235,7 +235,7 @@ def test_merge_inherits_ignore_lines_from_existing_targets(two_bundles, plugin):
     )
     merge.merge(plugin, [first])
     text = (plugin / "targets/APP_A/target.txt").read_text()
-    assert text.startswith("LANGUAGE ruby\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n")
+    assert text.startswith("LANGUAGE ruby\nTLM_UNIQUE_ID_MODE\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n")
     assert text.splitlines()[-3:] == [
         "IGNORE_PARAMETER CCSDS_STREAMID",
         "IGNORE_PARAMETER CCSDS_SEQUENCE",

@@ -187,8 +187,9 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
     _check_packet_names(app)
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
     if app.events_mid is not None:
-        # position within this target is immaterial (its MID is distinct from every other packet's); the order that
-        # matters is the cross-target MAP_TARGET order the merge emits so that nasa's ID-less catch-all comes last
+        # first for readability only: the target is in unique-id mode (target.txt), so every packet's identify? runs
+        # whatever the order and no other packet of this target carries the events MID. The order that matters is the
+        # cross-target MAP_TARGET order the merge emits so that nasa's ID-less catch-all comes last.
         blocks.append("\n".join(_events_packet(app)))
     if subpacketizer:
         blocks.append(
@@ -245,6 +246,10 @@ def emit_target() -> str:
     return "\n".join(
         [
             "LANGUAGE ruby",
+            # COSMOS < 6.10 identifies telemetry through a hash keyed on the FIRST packet's ID items unless this is
+            # set; 6.10+ auto-detects the mode and takes the keyword as a no-op. The bundle mixes ID-item layouts
+            # (packets: descriptor + packet id, channels: descriptor + channel id, events: descriptor only).
+            "TLM_UNIQUE_ID_MODE",
             f"COMMANDS {COMMANDS_FILE}",
             f"TELEMETRY {TELEMETRY_FILE}",
             "",
@@ -312,7 +317,8 @@ def _manifest(
 
 
 def _check_packet_names(app: cfs.CfsApp) -> None:
-    """A dictionary packet named like one of the bundle's own packets would define it twice in COSMOS"""
+    """The bundle's own packet names are refused in every mode (FPRIME_PACKETS/FPRIME_CHANNELS exist only with
+    --subpacketizer) so a dictionary stays valid whichever telemetry mode is chosen"""
     for packet in app.dictionary.packets:
         if emit.full_name(packet).upper() in RESERVED_PACKETS:
             raise GeneratorError(
