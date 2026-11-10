@@ -26,6 +26,7 @@ fprime_cfs_cosmos_generator = ["runtime/*.rb", "runtime/compat/*.rb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 120

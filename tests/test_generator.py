@@ -338,14 +338,16 @@ def test_duplicate_message_ids_are_refused(dictionary, tmp_path):
 
 def test_events_mid_without_a_log_packet_type_fails_loudly(dictionary, tmp_path):
     previous = generator.write_bundle(cfs.cfs_app(dictionary), tmp_path, "AP").directory
-    before = sorted(p.relative_to(previous) for p in previous.rglob("*"))
+    before = {p.relative_to(previous): p.read_bytes() for p in previous.rglob("*") if p.is_file()}
     types = {k: v for k, v in dictionary.layout.packet_types.items() if k != "FW_PACKET_LOG"}
     with patch.object(dictionary, "layout", dataclasses.replace(dictionary.layout, packet_types=types)):
         with pytest.warns(UserWarning):
             app = dataclasses.replace(cfs.cfs_app(dictionary), events_mid=0x0802)  # the cfs_app() guard bypassed
         with pytest.raises(generator.GeneratorError, match="FW_PACKET_LOG"):
             generator.write_bundle(app, tmp_path, "AP")
-    assert sorted(p.relative_to(previous) for p in previous.rglob("*")) == before  # rendered before any write
+    after = {p.relative_to(previous): p.read_bytes() for p in previous.rglob("*") if p.is_file()}
+    assert after == before  # rendered before any write: the previous bundle is untouched
+    assert generator.write_bundle(cfs.cfs_app(dictionary), tmp_path, "AP").manifest_path.is_file()
 
 
 def test_events_descriptor_is_the_log_packet_type_not_the_apid(dictionary):

@@ -187,8 +187,8 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
     _check_packet_names(app)
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
     if app.events_mid is not None:
-        # first packet of the target on purpose: COSMOS tries packets in definition order, and a dictionary packet
-        # identified by MID alone (nasa's ID-less catch-all) defined earlier would swallow the event packets
+        # position within this target is immaterial (its MID is distinct from every other packet's); the order that
+        # matters is the cross-target MAP_TARGET order the merge emits so that nasa's ID-less catch-all comes last
         blocks.append("\n".join(_events_packet(app)))
     if subpacketizer:
         blocks.append(
@@ -357,7 +357,7 @@ def write_bundle(
     if not TARGET_NAME.fullmatch(target_name):
         raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
     _check_reserved(app, target_name, channelized, reserved_manifests)
-    _check_packet_names(app)
+    _check_packet_names(app)  # emit_telemetry checks too; here it fails before the commands are rendered
     # render everything first: a refused dictionary must not delete the previous bundle or leave a half-written one
     rendered = {
         Path("targets", target_name, "target.txt"): emit_target(),

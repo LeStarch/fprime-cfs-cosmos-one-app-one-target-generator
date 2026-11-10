@@ -260,9 +260,9 @@ id, are dropped there). Without this packet nasa's ID-less file packets (`TA_AFF
 the event packets. The packet is omitted with a warning on stderr (the manifest then has no `events` message id) when
 `ComCfg.Apid` or the packet-type enumeration has no `FW_PACKET_LOG`.
 
-`manifest.json` `message_ids` (also the constants of `lib/fprime_<app>_msg_id.rb`: `COMMAND_MID`, `PACKETS_TLM_MID`,
-`CHANNELS_TLM_MID`, `EVENTS_TLM_MID`) lists `command`, `packetized telemetry`, `channelized telemetry` (channelized mode
-only) and `events` (only when `FPRIME_EVENTS` is generated); the merge's cross-bundle collision check and
+`manifest.json` `message_ids` lists `command`, `packetized_telemetry`, `channelized_telemetry` (channelized mode
+only) and `events` (only when `FPRIME_EVENTS` is generated); `lib/fprime_<app>_msg_id.rb` holds the same values as
+`CMD_MID`, `PACKETS_TLM_MID`, `CHANNELS_TLM_MID` and `EVENTS_TLM_MID`. The merge's cross-bundle collision check and
 `tests/cosmos/load_test.rb` read these keys, so consumers must treat `events` as optional.
 
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
