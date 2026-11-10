@@ -1,5 +1,6 @@
-# Loads the generated bundle into the real openc3 gem (no server), identifies telemetry, builds a command,
-# and runs the checksum protocol. Usage: ruby load_test.rb <bundle_dir> <TARGET> [header16|header12] [nasa_plugin_dir]
+# Loads the generated bundle into the real openc3 gem (no server), identifies telemetry (incl. the FPRIME_EVENTS
+# packet when manifest.json lists an events MID; fails if the manifest advertises it but the target lacks it; the
+# descriptors are hard-coded like the neighbouring cases), builds a command, and runs the checksum protocol. Usage: ruby load_test.rb <bundle_dir> <TARGET> [header16|header12] [nasa_plugin_dir]
 #   header16 (default): the shipped runtime/compat helpers (/compat), cFE 7 16-byte telemetry header
 #   header12: the 12-byte header stub (/stubs/header12) ahead of /compat on the load path
 #   nasa_plugin_dir: compare the shipped helpers' header items with its cfs_packet_headers.rb
@@ -61,11 +62,8 @@ puts "warnings: #{config.warnings.length}"
 config.warnings.first(10).each { |w| puts "  W: #{w}" }
 tlm = OpenC3::Telemetry.new(config)
 def identify(tlm, target, buf)
-  pkt = tlm.packets(target).values.find { |p| p.identify?(buf) }
-  return nil unless pkt
-  pkt = pkt.clone
-  pkt.buffer = buf
-  pkt
+  # COSMOS's own identification (unique-id mode or the first packet's ID items), not a per-packet identify? scan
+  tlm.identify!(buf, [target])
 end
 cmd = OpenC3::Commands.new(config)
 puts "telemetry packets: #{tlm.packets(target).length}"

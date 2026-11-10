@@ -162,7 +162,7 @@ def _telemetry_channel(channel, app: cfs.CfsApp, subpacketizer: bool) -> list[st
 
 def _events_packet(app: cfs.CfsApp) -> list[str]:
     """The F Prime event record (id, time, arguments) as one opaque block, identified by the events MID and the log
-    descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) decodes it exactly,
+    descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) receives it byte-for-byte,
     so no event text is reconstructed in COSMOS. Without it nasa's ID-less file packets swallow the event packets."""
     layout = app.dictionary.layout
     if layout.log_descriptor is None:
@@ -182,8 +182,11 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
         identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
     if app.events_mid is not None:
         identifiers["EVENTS_TLM_MID_STR"] = "EVENTS_TLM_MID"
+    _check_packet_names(app)
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
     if app.events_mid is not None:
+        # first packet of the target on purpose: COSMOS tries packets in definition order, and a dictionary packet
+        # identified by MID alone (nasa's ID-less catch-all) defined earlier would swallow the event packets
         blocks.append("\n".join(_events_packet(app)))
     if subpacketizer:
         blocks.append(
@@ -310,7 +313,10 @@ def _check_packet_names(app: cfs.CfsApp) -> None:
     """A dictionary packet named like one of the bundle's own packets would define it twice in COSMOS"""
     for packet in app.dictionary.packets:
         if emit.full_name(packet).upper() in RESERVED_PACKETS:
-            raise GeneratorError(f"Dictionary packet {packet.get_name()!r} collides with the bundle's reserved packet")
+            raise GeneratorError(
+                f"{app.name}: dictionary packet {packet.get_name()!r} collides with the bundle's reserved packet "
+                f"{emit.full_name(packet).upper()}"
+            )
 
 
 def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manifests: tuple[Path, ...]) -> None:
@@ -350,24 +356,30 @@ def write_bundle(
         raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
     _check_reserved(app, target_name, channelized, reserved_manifests)
     _check_packet_names(app)
+    # render everything first: a refused dictionary must not delete the previous bundle or leave a half-written one
+    rendered = {
+        Path("targets", target_name, "target.txt"): emit_target(),
+        Path("targets", target_name, "cmd_tlm", COMMANDS_FILE): emit_commands(app, target_name),
+        Path("targets", target_name, "cmd_tlm", TELEMETRY_FILE): emit_telemetry(
+            app, target_name, channelized, subpacketizer
+        ),
+        Path("lib", message_ids_file(target_name)): emit_message_ids(app, target_name, channelized),
+        Path("plugin.fragment.txt"): emit_plugin_fragment(target_name, channelized, subpacketizer),
+        Path("manifest.json"): json.dumps(
+            _manifest(app, target_name, channelized, subpacketizer, app.dictionary), indent=2
+        )
+        + "\n",
+    }
     output = Path(output) / target_name
     if output.exists():
         if not (output / "manifest.json").is_file():
             raise GeneratorError(f"{output} exists and is not a generated bundle; refusing to replace it")
         shutil.rmtree(output)
-    cmd_tlm = output / "targets" / target_name / "cmd_tlm"
-    cmd_tlm.mkdir(parents=True)
-    (cmd_tlm.parent / "target.txt").write_text(emit_target())
-    (cmd_tlm / COMMANDS_FILE).write_text(emit_commands(app, target_name))
-    (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, channelized, subpacketizer))
-    lib = output / "lib"
-    _copy_runtime(lib, channelized, subpacketizer)
-    (lib / message_ids_file(target_name)).write_text(emit_message_ids(app, target_name, channelized))
-    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name, channelized, subpacketizer))
+    _copy_runtime(output / "lib", channelized, subpacketizer)
+    for relative, text in rendered.items():
+        (output / relative).parent.mkdir(parents=True, exist_ok=True)
+        (output / relative).write_text(text)
     manifest_path = output / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(_manifest(app, target_name, channelized, subpacketizer, app.dictionary), indent=2) + "\n"
-    )
     return BundleArtifacts(output, target_name, manifest_path)
 
 

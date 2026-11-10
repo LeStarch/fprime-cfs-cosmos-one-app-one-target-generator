@@ -255,9 +255,15 @@ ComCfg.Apid.FW_PACKET_LOG`, `FPRIME_DESCRIPTOR` = the log descriptor) with the w
 as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS` and `FPRIME_CHANNELS` are reserved (in any letter case): a
 dictionary packet of one of these names is refused. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
 [fprime-cosmos](https://github.com/fprime-community/fprime-cosmos) `cosmos` data transport (`--cosmos-layout cfs`),
-which decodes the block exactly. Without this packet nasa's ID-less file packets (`TA_AFFINITY_FILE`, ...) swallow
+which hands the block byte-for-byte to the fprime-gds event decoder (records it cannot decode, e.g. an unknown event
+id, are dropped there). Without this packet nasa's ID-less file packets (`TA_AFFINITY_FILE`, ...) swallow
 the event packets. The packet is omitted with a warning on stderr (the manifest then has no `events` message id) when
 `ComCfg.Apid` or the packet-type enumeration has no `FW_PACKET_LOG`.
+
+`manifest.json` `message_ids` (also the constants of `lib/fprime_<app>_msg_id.rb`: `COMMAND_MID`, `PACKETS_TLM_MID`,
+`CHANNELS_TLM_MID`, `EVENTS_TLM_MID`) lists `command`, `packetized telemetry`, `channelized telemetry` (channelized mode
+only) and `events` (only when `FPRIME_EVENTS` is generated); the merge's cross-bundle collision check and
+`tests/cosmos/load_test.rb` read these keys, so consumers must treat `events` as optional.
 
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte
