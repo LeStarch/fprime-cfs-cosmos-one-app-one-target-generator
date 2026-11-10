@@ -63,7 +63,7 @@ puts "warnings: #{config.warnings.length}"
 config.warnings.first(10).each { |w| puts "  W: #{w}" }
 tlm = OpenC3::Telemetry.new(config)
 # openc3 < 6.10 has neither Packet#subpacket nor Telemetry#tlm_unique_id_mode: there target.txt TLM_UNIQUE_ID_MODE decides
-UNIQUE_ID_KEYWORD = File.read("#{bundle}/targets/#{target}/target.txt").include?('TLM_UNIQUE_ID_MODE')
+UNIQUE_ID_KEYWORD = File.read("#{bundle}/targets/#{target}/target.txt").match?(/^\s*TLM_UNIQUE_ID_MODE\b/)
 def identify(tlm, target, buf)
   # Telemetry#identify's two modes (openc3 6.10+ packets/telemetry.rb) without System.instance: unique-id mode
   # scans every packet's identify?; otherwise the FIRST non-virtual packet's ID items key the id-value hash
@@ -102,7 +102,7 @@ if events_mid
   stray[cfs_hdr(Integer(events_mid)).bytesize, 2] = [1].pack('n') # same MID, telemetry descriptor: not an event
   raise 'descriptor does not discriminate FPRIME_EVENTS' if tlm.packets(target).values.reject { |p| p.respond_to?(:subpacket) && p.subpacket }.any? { |p| p.identify?(stray) }
 else
-  puts 'SKIP events: bundle has no events MID (no FW_PACKET_LOG in the dictionary)'
+  puts 'SKIP events: manifest has no events MID (no FW_PACKET_LOG in the dictionary, or a pre-FPRIME_EVENTS bundle)'
 end
 
 # --- telemetry: Health packet (MID 0x0820, descriptor 32, packet id 1) with cFS header

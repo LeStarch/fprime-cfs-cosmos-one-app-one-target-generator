@@ -39,7 +39,7 @@ fprime-cfs-cosmos-merge --plugin path/to/cfs-cosmos-plugin \
   [--interface CFS_INTF] [--reserved-manifest ordinary_cfs_mids.json] [--dry-run] [--force]
 ```
 
-For each bundle the merge copies `targets/<APP>/` and `lib/fprime_<app>_msg_id.rb`, places the shared
+For each bundle the merge copies `targets/<APP>/` and `lib/fprime_<target>_msg_id.rb`, places the shared
 runtime files once (they must be byte-identical across bundles), appends the `VARIABLE` lines after the
 plugin's existing `VARIABLE`s, inserts `TARGET <APP> <%= ... %>` after the plugin's last `VARIABLE` (immediately
 before the chosen `INTERFACE`, or the ERB block holding it, when there are none; `--skip-target` if the plugin
@@ -110,7 +110,8 @@ at 0. Two COSMOS/F Prime differences are not papered over: COSMOS counts the bou
 and COSMOS rejects a definition whose yellow band is empty on both sides (`low_red == high_red`).
 
 Upgrading the generator can change the shared runtime files (`protocol_fprime_channel_splitter.rb`,
-`protocol_ccsds_checksum_compat.rb`, the compatibility helpers); re-run the merge with `--force` so they are
+`protocol_ccsds_checksum_compat.rb`, the compatibility helpers) and, for an unchanged dictionary, the target files
+too (e.g. `TLM_UNIQUE_ID_MODE`, `FPRIME_EVENTS`, `EVENTS_TLM_MID`); re-run the merge with `--force` so they are
 replaced (the CMake hook passes `--force` unless `NO_FORCE` is given).
 
 ## Wire-format notes
@@ -251,9 +252,10 @@ dependencies are redundant and harmless.
 - **`--subpacketizer`**: one parent packet per packet/channel MID with a `SUBPACKETIZER` and one `SUBPACKET` per
   F Prime packet/channel; `FPRIME_EVENTS` (below) stays a plain packet in this mode too. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
-In both modes the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `0x0800 |
+In both modes, and with or without `--no-channelized`, the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `0x0800 |
 ComCfg.Apid.FW_PACKET_LOG`, `FPRIME_DESCRIPTOR` = the log descriptor) with the whole event record (id, time, arguments)
-as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS` and `FPRIME_CHANNELS` are reserved (in any letter case): a
+as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS`, `FPRIME_CHANNELS` and `FPRIME_UNKNOWN` (the fprime-cosmos transport's reserved
+name) are reserved (in any letter case): a
 dictionary packet of one of these names is refused. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
 [fprime-cosmos](https://github.com/fprime-community/fprime-cosmos) `cosmos` data transport (`--cosmos-layout cfs`),
 which hands the block byte-for-byte to the fprime-gds event decoder (records it cannot decode, e.g. an unknown event
@@ -262,7 +264,7 @@ the event packets. The packet is omitted with a warning on stderr (the manifest 
 `ComCfg.Apid` or the packet-type enumeration has no `FW_PACKET_LOG`.
 
 `manifest.json` `message_ids` lists `command`, `packetized_telemetry`, `channelized_telemetry` (channelized mode
-only) and `events` (only when `FPRIME_EVENTS` is generated); `lib/fprime_<app>_msg_id.rb` holds the same values as
+only) and `events` (only when `FPRIME_EVENTS` is generated); `lib/fprime_<target>_msg_id.rb` (lower-cased target name) holds the same values as
 `CMD_MID`, `PACKETS_TLM_MID`, `CHANNELS_TLM_MID` and `EVENTS_TLM_MID`. The merge's cross-bundle collision check and
 `tests/cosmos/load_test.rb` read these keys, so consumers must treat `events` as optional.
 

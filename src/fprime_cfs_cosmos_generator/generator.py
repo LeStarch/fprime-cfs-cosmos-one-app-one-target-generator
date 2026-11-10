@@ -25,7 +25,7 @@ MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
 EVENTS_PACKET = "FPRIME_EVENTS"  # packet and item names are the wire contract with fprime-cosmos's cosmos transport
 EVENT_RECORD_ITEM = "RECORD"
 PACKETS_PACKET = "FPRIME_PACKETS"  # subpacketizer-mode parent of the dictionary packets
-RESERVED_PACKETS = frozenset({EVENTS_PACKET, PACKETS_PACKET, emit.CHANNELIZED_PACKET})
+RESERVED_PACKETS = frozenset({EVENTS_PACKET, PACKETS_PACKET, emit.CHANNELIZED_PACKET, emit.UNKNOWN_PACKET})
 
 
 class GeneratorError(Exception):

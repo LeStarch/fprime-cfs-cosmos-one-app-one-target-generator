@@ -312,7 +312,7 @@ def test_events_packet_is_skipped_with_a_warning_without_a_log_apid(dictionary, 
     assert "events" not in json.loads((root / "manifest.json").read_text())["message_ids"]
 
 
-@pytest.mark.parametrize("name", ["fprime_events", "FPRIME_PACKETS", "Fprime_Channels"])
+@pytest.mark.parametrize("name", ["fprime_events", "FPRIME_PACKETS", "Fprime_Channels", "FPRIME_unknown"])
 def test_reserved_packet_names_are_refused(dictionary, tmp_path, name):
     app = cfs.cfs_app(dictionary)
     previous = generator.write_bundle(app, tmp_path, "AP").directory  # a bundle from an earlier run

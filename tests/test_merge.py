@@ -88,6 +88,16 @@ def test_merge_is_idempotent(two_bundles, plugin):
     assert len(report.unchanged) == 6
 
 
+def test_merge_rejects_events_mid_collision(two_bundles, plugin):
+    first, second = two_bundles
+    events_mid = json.loads((first / "manifest.json").read_text())["message_ids"]["events"]
+    manifest = json.loads((second / "manifest.json").read_text())
+    manifest["message_ids"]["events"] = events_mid
+    (second / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(merge.MergeError, match="events"):
+        merge.merge(plugin, [first, second])
+
+
 def test_merge_rejects_mid_and_target_collisions(two_bundles, plugin, tmp_path):
     first, second = two_bundles
     manifest = json.loads((second / "manifest.json").read_text())
