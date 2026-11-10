@@ -162,8 +162,9 @@ def _telemetry_channel(channel, app: cfs.CfsApp, subpacketizer: bool) -> list[st
 
 def _events_packet(app: cfs.CfsApp) -> list[str]:
     """The F Prime event record (id, time, arguments) as one opaque block, identified by the events MID and the log
-    descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) receives it byte-for-byte,
-    so no event text is reconstructed in COSMOS. Without it nasa's ID-less file packets swallow the event packets."""
+    descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) receives it
+    byte-for-byte, so no event text is reconstructed in COSMOS. Without it nasa's ID-less file packets swallow the
+    event packets."""
     layout = app.dictionary.layout
     if layout.log_descriptor is None:
         raise GeneratorError(f"{app.name}: events_mid is set but the packet-type enumeration has no FW_PACKET_LOG")
