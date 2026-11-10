@@ -93,11 +93,11 @@ if events_mid
   puts "identify event -> #{id ? id.packet_name : 'nil'} record=#{id && id.read('RECORD').unpack1('H*')}"
   raise 'event not identified' unless id && id.packet_name == 'FPRIME_EVENTS'
   raise 'event record not opaque/exact' unless id.read('RECORD') == record
-  matches = tlm.packets(target).values.count { |p| p.identify?(buf) }
+  matches = tlm.packets(target).values.reject(&:subpacket).count { |p| p.identify?(buf) }
   raise "event identified by #{matches} packets" unless matches == 1
   stray = buf.dup
   stray[cfs_hdr(Integer(events_mid)).bytesize, 2] = [1].pack('n') # same MID, telemetry descriptor: not an event
-  raise 'descriptor does not discriminate FPRIME_EVENTS' if tlm.packets(target).values.any? { |p| p.identify?(stray) }
+  raise 'descriptor does not discriminate FPRIME_EVENTS' if tlm.packets(target).values.reject(&:subpacket).any? { |p| p.identify?(stray) }
 else
   puts 'SKIP events: bundle has no events MID (no FW_PACKET_LOG in the dictionary)'
 end
