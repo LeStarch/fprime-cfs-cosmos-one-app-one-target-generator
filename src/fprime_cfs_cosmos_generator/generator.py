@@ -24,7 +24,8 @@ MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
 MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
 EVENTS_PACKET = "FPRIME_EVENTS"  # packet and item names are the wire contract with fprime-cosmos's cosmos transport
 EVENT_RECORD_ITEM = "RECORD"
-RESERVED_PACKETS = frozenset({EVENTS_PACKET, "FPRIME_PACKETS", "FPRIME_CHANNELS"})
+PACKETS_PACKET = "FPRIME_PACKETS"  # subpacketizer-mode parent of the dictionary packets
+RESERVED_PACKETS = frozenset({EVENTS_PACKET, PACKETS_PACKET, emit.CHANNELIZED_PACKET})
 
 
 class GeneratorError(Exception):
@@ -193,7 +194,7 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
         blocks.append(
             "\n".join(
                 _telemetry_parent(
-                    "FPRIME_PACKETS",
+                    PACKETS_PACKET,
                     "PACKETS_TLM_MID_STR",
                     "F Prime packetized telemetry",
                     "PACKET",
@@ -207,7 +208,7 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
             blocks.append(
                 "\n".join(
                     _telemetry_parent(
-                        "FPRIME_CHANNELS",
+                        emit.CHANNELIZED_PACKET,
                         "CHANNELS_TLM_MID_STR",
                         "F Prime channelized telemetry",
                         "CHANNELS",
