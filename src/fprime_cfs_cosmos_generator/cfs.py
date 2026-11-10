@@ -7,6 +7,7 @@ ComCfg.FprimeCommandFunctionCode constant.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 from .dictionary import APID_ENUM, CFS_FUNCTION_CODE_CONSTANT, DictionaryError, FprimeDictionary
@@ -20,6 +21,7 @@ APID_MASK = 0x07FF
 COMMAND_APID = "FW_PACKET_COMMAND"
 CHANNELS_APID = "FW_PACKET_TELEM"
 PACKETS_APID = "FW_PACKET_PACKETIZED_TLM"
+EVENTS_APID = "FW_PACKET_LOG"
 # Ruby conversion: cFS COSMOS targets are Ruby targets
 TIME_CONVERSION = "openc3/conversions/unix_time_conversion.rb"
 
@@ -34,11 +36,14 @@ class CfsApp:
     channels_mid: int
     packets_mid: int
     function_code: int
+    events_mid: int | None = None  # None (events not modeled) when ComCfg.Apid or the packet types lack FW_PACKET_LOG
 
     def message_ids(self, channelized: bool = True) -> dict[str, int]:
         ids = {"command": self.command_mid, "packetized telemetry": self.packets_mid}
         if channelized:
             ids["channelized telemetry"] = self.channels_mid
+        if self.events_mid is not None:
+            ids["events"] = self.events_mid
         return ids
 
 
@@ -62,6 +67,15 @@ def cfs_app(dictionary: FprimeDictionary) -> CfsApp:
         raise DictionaryError(f"{name}: missing dictionary constant {CFS_FUNCTION_CODE_CONSTANT}")
     if not 0 <= dictionary.cfs_function_code <= 0x7F:
         raise DictionaryError(f"{name}: {CFS_FUNCTION_CODE_CONSTANT} = {dictionary.cfs_function_code} exceeds 7 bits")
+    events_mid = None
+    if EVENTS_APID in apids and dictionary.layout.log_descriptor is not None:
+        events_mid = _stream_id(TELEMETRY_STREAM_ID, apids, EVENTS_APID, dictionary)
+    else:
+        warnings.warn(
+            f"{name}: no {EVENTS_APID} in {APID_ENUM} or the packet-type enumeration; FPRIME_EVENTS is not generated "
+            "and F Prime events will not be identified in COSMOS",
+            stacklevel=2,
+        )
     return CfsApp(
         dictionary=dictionary,
         name=identifier(dictionary.deployment_name.rsplit(".", 1)[-1]),
@@ -69,4 +83,5 @@ def cfs_app(dictionary: FprimeDictionary) -> CfsApp:
         channels_mid=_stream_id(TELEMETRY_STREAM_ID, apids, CHANNELS_APID, dictionary),
         packets_mid=_stream_id(TELEMETRY_STREAM_ID, apids, PACKETS_APID, dictionary),
         function_code=dictionary.cfs_function_code,
+        events_mid=events_mid,
     )

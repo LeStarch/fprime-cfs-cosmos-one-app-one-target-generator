@@ -1,5 +1,7 @@
-# Loads the generated bundle into the real openc3 gem (no server), identifies telemetry, builds a command,
-# and runs the checksum protocol. Usage: ruby load_test.rb <bundle_dir> <TARGET> [header16|header12] [nasa_plugin_dir]
+# Loads the generated bundle into the real openc3 gem (no server), identifies telemetry (incl. the FPRIME_EVENTS
+# packet when manifest.json lists an events MID; fails if the manifest advertises it but the target lacks it; the
+# descriptors are hard-coded like the neighbouring cases), builds a command, and runs the checksum protocol.
+# Usage: ruby load_test.rb <bundle_dir> <TARGET> [header16|header12] [nasa_plugin_dir]
 #   header16 (default): the shipped runtime/compat helpers (/compat), cFE 7 16-byte telemetry header
 #   header12: the 12-byte header stub (/stubs/header12) ahead of /compat on the load path
 #   nasa_plugin_dir: compare the shipped helpers' header items with its cfs_packet_headers.rb
@@ -60,8 +62,20 @@ end
 puts "warnings: #{config.warnings.length}"
 config.warnings.first(10).each { |w| puts "  W: #{w}" }
 tlm = OpenC3::Telemetry.new(config)
+# openc3 < 6.10 has neither Packet#subpacket nor Telemetry#tlm_unique_id_mode: there target.txt TLM_UNIQUE_ID_MODE decides
+UNIQUE_ID_KEYWORD = File.read("#{bundle}/targets/#{target}/target.txt").match?(/^\s*TLM_UNIQUE_ID_MODE\b/)
 def identify(tlm, target, buf)
-  pkt = tlm.packets(target).values.find { |p| p.identify?(buf) }
+  # Telemetry#identify's two modes (openc3 6.10+ packets/telemetry.rb) without System.instance: unique-id mode
+  # scans every packet's identify?; otherwise the FIRST non-virtual packet's ID items key the id-value hash
+  packets = tlm.packets(target).values.reject { |p| p.respond_to?(:subpacket) && p.subpacket }
+  unique = tlm.respond_to?(:tlm_unique_id_mode) ? tlm.tlm_unique_id_mode(target) : UNIQUE_ID_KEYWORD
+  if unique
+    pkt = packets.find { |p| p.identify?(buf) }
+  else
+    first = packets.find { |p| !p.virtual }
+    hash = tlm.config.tlm_id_value_hash[target]
+    pkt = first && (hash[first.read_id_values(buf)] || hash['CATCHALL'])
+  end
   return nil unless pkt
   pkt = pkt.clone
   pkt.buffer = buf
@@ -70,6 +84,26 @@ end
 cmd = OpenC3::Commands.new(config)
 puts "telemetry packets: #{tlm.packets(target).length}"
 puts "command packets: #{cmd.packets(target).length}"
+
+# --- telemetry: an F Prime event (events MID, descriptor 2) as one opaque, exact RECORD; driven by the bundle's manifest
+events_mid = JSON.parse(File.read("#{bundle}/manifest.json"))['message_ids']['events']
+if events_mid
+  raise 'manifest declares an events MID but the target has no FPRIME_EVENTS packet' unless tlm.packets(target).key?('FPRIME_EVENTS')
+  record = ['10020001000200000f47ae00090c9000000007'].pack('H*')
+  buf = cfs_hdr(Integer(events_mid)) + [2].pack('n') + record
+  buf[4, 2] = [buf.bytesize - 7].pack('n')
+  id = identify(tlm, target, buf)
+  puts "identify event -> #{id ? id.packet_name : 'nil'} record=#{id && id.read('RECORD').unpack1('H*')}"
+  raise 'event not identified' unless id && id.packet_name == 'FPRIME_EVENTS'
+  raise 'event record not opaque/exact' unless id.read('RECORD') == record
+  matches = tlm.packets(target).values.reject { |p| p.respond_to?(:subpacket) && p.subpacket }.count { |p| p.identify?(buf) }
+  raise "event identified by #{matches} packets" unless matches == 1
+  stray = buf.dup
+  stray[cfs_hdr(Integer(events_mid)).bytesize, 2] = [1].pack('n') # same MID, telemetry descriptor: not an event
+  raise 'descriptor does not discriminate FPRIME_EVENTS' if tlm.packets(target).values.reject { |p| p.respond_to?(:subpacket) && p.subpacket }.any? { |p| p.identify?(stray) }
+else
+  puts 'SKIP events: manifest has no events MID (no FW_PACKET_LOG in the dictionary, or a pre-FPRIME_EVENTS bundle)'
+end
 
 # --- telemetry: Health packet (MID 0x0820, descriptor 32, packet id 1) with cFS header
 hdr = cfs_hdr(0x0820)

@@ -22,6 +22,10 @@ COMMANDS_FILE = "fprime_cmd.txt"
 TELEMETRY_FILE = "fprime_tlm.txt"
 MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
 MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
+EVENTS_PACKET = "FPRIME_EVENTS"  # packet and item names are the wire contract with fprime-cosmos's cosmos transport
+EVENT_RECORD_ITEM = "RECORD"
+PACKETS_PACKET = "FPRIME_PACKETS"  # subpacketizer-mode parent of the dictionary packets
+RESERVED_PACKETS = frozenset({EVENTS_PACKET, PACKETS_PACKET, emit.CHANNELIZED_PACKET, emit.UNKNOWN_PACKET})
 
 
 class GeneratorError(Exception):
@@ -157,17 +161,41 @@ def _telemetry_channel(channel, app: cfs.CfsApp, subpacketizer: bool) -> list[st
     )
 
 
+def _events_packet(app: cfs.CfsApp) -> list[str]:
+    """The F Prime event record (id, time, arguments) as one opaque block, identified by the events MID and the log
+    descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) receives it
+    byte-for-byte, so no event text is reconstructed in COSMOS. Without it nasa's ID-less file packets swallow the
+    event packets."""
+    layout = app.dictionary.layout
+    if layout.log_descriptor is None:
+        raise GeneratorError(f"{app.name}: events_mid is set but the packet-type enumeration has no FW_PACKET_LOG")
+    description = "F Prime event record (opaque; decoded by fprime-gds)"
+    record_description = emit.quote("Event id, time and arguments as serialized by F Prime")
+    lines = _telemetry_header(EVENTS_PACKET, "EVENTS_TLM_MID_STR", description)
+    lines.extend(_big_endian(emit._item_lines(emit._descriptor_item(layout), layout.log_descriptor)))
+    lines.append(f"  APPEND_ITEM {EVENT_RECORD_ITEM} 0 BLOCK {record_description}")
+    return lines
+
+
 def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, subpacketizer: bool = False) -> str:
     """Flat mode (default) works on every COSMOS 6.x; subpacketizer mode needs COSMOS 6.10+ (SUBPACKET keyword)"""
     identifiers = {"PACKETS_TLM_MID_STR": "PACKETS_TLM_MID"}
     if channelized:
         identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
+    if app.events_mid is not None:
+        identifiers["EVENTS_TLM_MID_STR"] = "EVENTS_TLM_MID"
+    _check_packet_names(app)
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
+    if app.events_mid is not None:
+        # first for readability only: the target is in unique-id mode (target.txt), so every packet's identify? runs
+        # whatever the order and no other packet of this target carries the events MID. The order that matters is the
+        # cross-target MAP_TARGET order the merge emits so that nasa's ID-less catch-all comes last.
+        blocks.append("\n".join(_events_packet(app)))
     if subpacketizer:
         blocks.append(
             "\n".join(
                 _telemetry_parent(
-                    "FPRIME_PACKETS",
+                    PACKETS_PACKET,
                     "PACKETS_TLM_MID_STR",
                     "F Prime packetized telemetry",
                     "PACKET",
@@ -181,7 +209,7 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
             blocks.append(
                 "\n".join(
                     _telemetry_parent(
-                        "FPRIME_CHANNELS",
+                        emit.CHANNELIZED_PACKET,
                         "CHANNELS_TLM_MID_STR",
                         "F Prime channelized telemetry",
                         "CHANNELS",
@@ -208,6 +236,8 @@ def emit_message_ids(app: cfs.CfsApp, target_name: str, channelized: bool = True
     ]
     if channelized:
         lines.append(f"  CHANNELS_TLM_MID = '{app.channels_mid:#06x}'")
+    if app.events_mid is not None:
+        lines.append(f"  EVENTS_TLM_MID = '{app.events_mid:#06x}'")
     lines.extend(["end", ""])
     return "\n".join(lines)
 
@@ -216,6 +246,10 @@ def emit_target() -> str:
     return "\n".join(
         [
             "LANGUAGE ruby",
+            # COSMOS < 6.10 identifies telemetry through a hash keyed on the FIRST packet's ID items unless this is
+            # set; 6.10+ auto-detects the mode and takes the keyword as a no-op. The bundle mixes ID-item layouts
+            # (packets: descriptor + packet id, channels: descriptor + channel id, events: descriptor only).
+            "TLM_UNIQUE_ID_MODE",
             f"COMMANDS {COMMANDS_FILE}",
             f"TELEMETRY {TELEMETRY_FILE}",
             "",
@@ -264,6 +298,8 @@ def _manifest(
     mids = {"command": app.command_mid, "packetized_telemetry": app.packets_mid}
     if channelized:
         mids["channelized_telemetry"] = app.channels_mid
+    if app.events_mid is not None:
+        mids["events"] = app.events_mid
     return {
         "schema_version": 1,
         "target": target_name,
@@ -280,10 +316,21 @@ def _manifest(
     }
 
 
+def _check_packet_names(app: cfs.CfsApp) -> None:
+    """The bundle's own packet names are refused in every mode (FPRIME_PACKETS/FPRIME_CHANNELS exist only with
+    --subpacketizer) so a dictionary stays valid whichever telemetry mode is chosen"""
+    for packet in app.dictionary.packets:
+        if emit.full_name(packet).upper() in RESERVED_PACKETS:
+            raise GeneratorError(
+                f"{app.name}: dictionary packet {packet.get_name()!r} collides with the bundle's reserved packet "
+                f"{emit.full_name(packet).upper()}"
+            )
+
+
 def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manifests: tuple[Path, ...]) -> None:
     requested = app.message_ids(channelized)
     if len(set(requested.values())) != len(requested):
-        raise GeneratorError(f"{app.name}: command and telemetry message identifiers must be distinct")
+        raise GeneratorError(f"{app.name}: command, telemetry and event message identifiers must be distinct")
     for path in manifests:
         try:
             reserved = json.loads(path.read_text())
@@ -316,24 +363,31 @@ def write_bundle(
     if not TARGET_NAME.fullmatch(target_name):
         raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
     _check_reserved(app, target_name, channelized, reserved_manifests)
+    _check_packet_names(app)  # emit_telemetry checks too; here it fails before the commands are rendered
+    # render everything first: a refused dictionary must not delete the previous bundle or leave a half-written one
+    rendered = {
+        Path("targets", target_name, "target.txt"): emit_target(),
+        Path("targets", target_name, "cmd_tlm", COMMANDS_FILE): emit_commands(app, target_name),
+        Path("targets", target_name, "cmd_tlm", TELEMETRY_FILE): emit_telemetry(
+            app, target_name, channelized, subpacketizer
+        ),
+        Path("lib", message_ids_file(target_name)): emit_message_ids(app, target_name, channelized),
+        Path("plugin.fragment.txt"): emit_plugin_fragment(target_name, channelized, subpacketizer),
+        Path("manifest.json"): json.dumps(
+            _manifest(app, target_name, channelized, subpacketizer, app.dictionary), indent=2
+        )
+        + "\n",
+    }
     output = Path(output) / target_name
     if output.exists():
         if not (output / "manifest.json").is_file():
             raise GeneratorError(f"{output} exists and is not a generated bundle; refusing to replace it")
         shutil.rmtree(output)
-    cmd_tlm = output / "targets" / target_name / "cmd_tlm"
-    cmd_tlm.mkdir(parents=True)
-    (cmd_tlm.parent / "target.txt").write_text(emit_target())
-    (cmd_tlm / COMMANDS_FILE).write_text(emit_commands(app, target_name))
-    (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, channelized, subpacketizer))
-    lib = output / "lib"
-    _copy_runtime(lib, channelized, subpacketizer)
-    (lib / message_ids_file(target_name)).write_text(emit_message_ids(app, target_name, channelized))
-    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name, channelized, subpacketizer))
+    _copy_runtime(output / "lib", channelized, subpacketizer)
+    for relative, text in rendered.items():
+        (output / relative).parent.mkdir(parents=True, exist_ok=True)
+        (output / relative).write_text(text)
     manifest_path = output / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(_manifest(app, target_name, channelized, subpacketizer, app.dictionary), indent=2) + "\n"
-    )
     return BundleArtifacts(output, target_name, manifest_path)
 
 

@@ -26,7 +26,12 @@ def two_bundles(dictionary, tmp_path):
     first = generator.write_bundle(app, tmp_path / "gen", "APP_A").directory
     second = generator.write_bundle(app, tmp_path / "gen", "APP_B").directory
     manifest = json.loads((second / "manifest.json").read_text())
-    manifest["message_ids"] = {"command": "0x1900", "packetized_telemetry": "0x0920", "channelized_telemetry": "0x0901"}
+    manifest["message_ids"] = {
+        "command": "0x1900",
+        "packetized_telemetry": "0x0920",
+        "channelized_telemetry": "0x0901",
+        "events": "0x0902",
+    }
     (second / "manifest.json").write_text(json.dumps(manifest))
     return first, second
 
@@ -81,6 +86,16 @@ def test_merge_is_idempotent(two_bundles, plugin):
     assert report.copied == []
     assert report.plugin_additions == []
     assert len(report.unchanged) == 6
+
+
+def test_merge_rejects_events_mid_collision(two_bundles, plugin):
+    first, second = two_bundles
+    events_mid = json.loads((first / "manifest.json").read_text())["message_ids"]["events"]
+    manifest = json.loads((second / "manifest.json").read_text())
+    manifest["message_ids"]["events"] = events_mid
+    (second / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(merge.MergeError, match="events"):
+        merge.merge(plugin, [first, second])
 
 
 def test_merge_rejects_mid_and_target_collisions(two_bundles, plugin, tmp_path):
@@ -230,7 +245,7 @@ def test_merge_inherits_ignore_lines_from_existing_targets(two_bundles, plugin):
     )
     merge.merge(plugin, [first])
     text = (plugin / "targets/APP_A/target.txt").read_text()
-    assert text.startswith("LANGUAGE ruby\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n")
+    assert text.startswith("LANGUAGE ruby\nTLM_UNIQUE_ID_MODE\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n")
     assert text.splitlines()[-3:] == [
         "IGNORE_PARAMETER CCSDS_STREAMID",
         "IGNORE_PARAMETER CCSDS_SEQUENCE",
