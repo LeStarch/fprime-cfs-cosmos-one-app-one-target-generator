@@ -247,22 +247,23 @@ dependencies are redundant and harmless.
   channel records into one CCSDS packet, so the bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
   protocol (wired by the fragment) that splits such a packet into one COSMOS packet per record, each with a
   copy of the cFS header and descriptor.
-- **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
-  F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
+- **`--subpacketizer`**: one parent packet per packet/channel MID with a `SUBPACKETIZER` and one `SUBPACKET` per
+  F Prime packet/channel; `FPRIME_EVENTS` (below) stays a plain packet in this mode too. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
 In both modes the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `0x0800 |
 ComCfg.Apid.FW_PACKET_LOG`, `FPRIME_DESCRIPTOR` = the log descriptor) with the whole event record (id, time, arguments)
-as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS` and `FPRIME_CHANNELS` are reserved: a dictionary
-packet of one of these names is refused. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
+as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS` and `FPRIME_CHANNELS` are reserved (in any letter case): a
+dictionary packet of one of these names is refused. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
 [fprime-cosmos](https://github.com/fprime-community/fprime-cosmos) `cosmos` data transport (`--cosmos-layout cfs`),
 which decodes the block exactly. Without this packet nasa's ID-less file packets (`TA_AFFINITY_FILE`, ...) swallow
-the event packets. The packet is omitted (silently; the manifest then has no `events` message id) when `ComCfg.Apid`
-or the packet-type enumeration has no `FW_PACKET_LOG`.
+the event packets. The packet is omitted with a warning on stderr (the manifest then has no `events` message id) when
+`ComCfg.Apid` or the packet-type enumeration has no `FW_PACKET_LOG`.
 
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte
 telemetry header; `--header12` swaps in the 12-byte header stub of `tests/cosmos/stubs/header12`), identifies a
-packet and a channel, splits a multi-record channel packet, builds a command and checks the checksum protocol;
+packet, a channel and (when the bundle has it) an `FPRIME_EVENTS` packet with a byte-exact `RECORD`, splits a
+multi-record channel packet, builds a command and checks the checksum protocol;
 `--nasa` additionally compares the helpers' header items with the plugin's `cfs_packet_headers.rb`; `--image`
 substitutes an image reference (e.g. digest-pinned) for `openc3inc/openc3-cosmos-cmd-tlm-api:<version>`.
 
