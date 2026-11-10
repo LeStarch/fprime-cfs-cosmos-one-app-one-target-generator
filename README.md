@@ -85,7 +85,8 @@ is an error (before anything is written), and so is a generated and a hand-writt
 judged). Only files reachable
 from `lib/` or `targets/<APP>/lib/` can be loaded by that target's microservices at runtime, so the compatibility
 `Ccsds.tlm` deliberately omits nasa's `PACKET_TIME` conversion (its Ruby file lives in `targets/CFS/lib`); the
-generated `FPRIME_TIME` item carries the F Prime timestamp.
+generated `FPRIME_TIME` item carries the F Prime timestamp (except in `FPRIME_EVENTS`, whose time sits inside the
+opaque record).
 
 nasa/cfs-cosmos-plugin's `INTERFACE` sits inside `<% (1..$cfs_fleet_globals_num_cfs_targets).each ... %>`, so the
 merge warns that the inserted `MAP_TARGET` renders once per cFS instance: every interface of the loop then maps the
@@ -98,9 +99,8 @@ listens on for commands (`ci_lab`, UDP 1234 — the Docker bridge gateway when c
 `global_tlm_output_ip` to the address `to_lab` sends telemetry to (UDP 2234, the host's address), publish
 `2234/udp` on the `openc3-operator` container, and enable `to_lab` output towards that address (`to_lab` has one
 destination; another ground system enabling it takes the stream). `cfs_endianness` must match the flight
-processor. F Prime event packets (0x0802) have no COSMOS definition in flat mode and end up in the CFS target's
-catch-all file packets (`TA_AFFINITY_FILE ... actual packet length` errors); that is a nasa/cfs-cosmos-plugin
-issue (packets without ID items), not something the bundle changes.
+processor. F Prime event packets are identified by the bundle's `FPRIME_EVENTS` packet (see Telemetry modes); without
+it they would end up in the CFS target's catch-all file packets (`TA_AFFINITY_FILE ... actual packet length` errors).
 
 Dictionary limits become `LIMITS DEFAULT 1 ENABLED <red_low> <yellow_low> <yellow_high> <red_high>`: bounds the
 dictionary leaves out are open (`-1e308` / `1e308` for a missing red bound; a missing yellow bound equals the red
@@ -250,12 +250,14 @@ dependencies are redundant and harmless.
 - **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
   F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
-In both modes the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `ComCfg.Apid.FW_PACKET_LOG`,
-`FPRIME_DESCRIPTOR` = the log descriptor) with the whole event record (id, time, arguments) as one opaque `RECORD`
-block. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
+In both modes the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `0x0800 |
+ComCfg.Apid.FW_PACKET_LOG`, `FPRIME_DESCRIPTOR` = the log descriptor) with the whole event record (id, time, arguments)
+as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS` and `FPRIME_CHANNELS` are reserved: a dictionary
+packet of one of these names is refused. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
 [fprime-cosmos](https://github.com/fprime-community/fprime-cosmos) `cosmos` data transport (`--cosmos-layout cfs`),
 which decodes the block exactly. Without this packet nasa's ID-less file packets (`TA_AFFINITY_FILE`, ...) swallow
-the event packets. The packet is omitted when `ComCfg.Apid` has no `FW_PACKET_LOG`.
+the event packets. The packet is omitted (silently; the manifest then has no `events` message id) when `ComCfg.Apid`
+or the packet-type enumeration has no `FW_PACKET_LOG`.
 
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte

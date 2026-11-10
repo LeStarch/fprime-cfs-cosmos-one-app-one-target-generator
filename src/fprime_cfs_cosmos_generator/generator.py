@@ -22,8 +22,9 @@ COMMANDS_FILE = "fprime_cmd.txt"
 TELEMETRY_FILE = "fprime_tlm.txt"
 MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
 MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
-EVENTS_PACKET = "FPRIME_EVENTS"
+EVENTS_PACKET = "FPRIME_EVENTS"  # packet and item names are the wire contract with fprime-cosmos's cosmos transport
 EVENT_RECORD_ITEM = "RECORD"
+RESERVED_PACKETS = frozenset({EVENTS_PACKET, "FPRIME_PACKETS", "FPRIME_CHANNELS"})
 
 
 class GeneratorError(Exception):
@@ -179,6 +180,9 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
         identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
     if app.events_mid is not None:
         identifiers["EVENTS_TLM_MID_STR"] = "EVENTS_TLM_MID"
+    for packet in app.dictionary.packets:
+        if emit.full_name(packet).upper() in RESERVED_PACKETS:
+            raise GeneratorError(f"Dictionary packet {packet.get_name()!r} collides with the bundle's reserved packet")
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
     if app.events_mid is not None:
         blocks.append("\n".join(_events_packet(app)))
@@ -306,7 +310,7 @@ def _manifest(
 def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manifests: tuple[Path, ...]) -> None:
     requested = app.message_ids(channelized)
     if len(set(requested.values())) != len(requested):
-        raise GeneratorError(f"{app.name}: command and telemetry message identifiers must be distinct")
+        raise GeneratorError(f"{app.name}: command, telemetry and event message identifiers must be distinct")
     for path in manifests:
         try:
             reserved = json.loads(path.read_text())

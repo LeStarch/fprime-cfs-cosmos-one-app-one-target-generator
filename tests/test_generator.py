@@ -1,4 +1,6 @@
+import dataclasses
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -144,6 +146,11 @@ def test_no_channelized_output(dictionary, tmp_path):
     manifest = json.loads((root / "manifest.json").read_text())
     assert "FPRIME_CHANNELS" not in telemetry
     assert "channelized_telemetry" not in manifest["message_ids"]
+    # events are not channel telemetry: they stay regardless of the channelized flag
+    assert "TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS " in telemetry
+    assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in telemetry
+    assert manifest["message_ids"]["events"] == "0x0802"
+    assert "EVENTS_TLM_MID" in (root / "lib/fprime_ap_msg_id.rb").read_text()
 
 
 def test_reserved_manifest_rejects_target_and_mid_collisions(dictionary, tmp_path):
@@ -281,13 +288,55 @@ def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dic
     assert "FPRIME_EVENTS" in (subpacketized / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
 
 
-def test_events_packet_is_skipped_without_a_log_apid(dictionary, tmp_path):
-    from unittest.mock import patch
-
-    with patch.object(dictionary, "apids", {k: v for k, v in dictionary.apids.items() if k != "FW_PACKET_LOG"}):
+def test_events_packet_is_skipped_with_a_warning_without_a_log_apid(dictionary, tmp_path):
+    with (
+        patch.object(dictionary, "apids", {k: v for k, v in dictionary.apids.items() if k != "FW_PACKET_LOG"}),
+        pytest.warns(UserWarning, match="FPRIME_EVENTS is not generated"),
+    ):
         app = cfs.cfs_app(dictionary)
     assert app.events_mid is None
     root = generator.write_bundle(app, tmp_path, "AP").directory
     assert "FPRIME_EVENTS" not in (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     assert "EVENTS_TLM_MID" not in (root / "lib/fprime_ap_msg_id.rb").read_text()
     assert "events" not in json.loads((root / "manifest.json").read_text())["message_ids"]
+
+
+@pytest.mark.parametrize("name", ["fprime_events", "FPRIME_PACKETS", "Fprime_Channels"])
+def test_reserved_packet_names_are_refused(dictionary, tmp_path, name):
+    app = cfs.cfs_app(dictionary)
+    packet = app.dictionary.packets[0]
+    with (
+        patch.object(packet, "get_name", return_value=name),
+        pytest.raises(generator.GeneratorError, match="collides"),
+    ):
+        generator.write_bundle(app, tmp_path, "AP")
+
+
+def test_events_packet_is_skipped_without_a_log_packet_type(dictionary, tmp_path):
+    types = {k: v for k, v in dictionary.layout.packet_types.items() if k != "FW_PACKET_LOG"}
+    with (
+        patch.object(dictionary, "layout", dataclasses.replace(dictionary.layout, packet_types=types)),
+        pytest.warns(UserWarning, match="FPRIME_EVENTS is not generated"),
+    ):
+        assert dictionary.layout.log_descriptor is None
+        app = cfs.cfs_app(dictionary)
+    assert app.events_mid is None
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    assert "FPRIME_EVENTS" not in (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+
+
+def test_events_apid_must_be_eleven_bits(dictionary):
+    with (
+        patch.object(dictionary, "apids", {**dictionary.apids, "FW_PACKET_LOG": 0x800}),
+        pytest.raises(cfs.DictionaryError, match="FW_PACKET_LOG"),
+    ):
+        cfs.cfs_app(dictionary)
+
+
+def test_reserved_manifest_rejects_the_events_mid(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    assert app.message_ids()["events"] == 0x0802
+    manifest = tmp_path / "other.json"
+    manifest.write_text(json.dumps({"target": "OTHER", "message_ids": {"command": "0x0802"}}))
+    with pytest.raises(generator.GeneratorError, match="0x0802 \\(events\\)"):
+        generator.write_bundle(app, tmp_path / "out", "AP", reserved_manifests=(manifest,))

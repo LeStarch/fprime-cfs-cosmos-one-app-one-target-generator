@@ -109,6 +109,19 @@ id = identify(tlm, target, buf)
 puts "identify channel -> #{id ? id.packet_name : 'nil'} value=#{id && id.read('CommandsDispatched')}"
 raise 'channel not identified' unless id && id.packet_name.upcase == 'CFSCORE.CMDDISP.COMMANDSDISPATCHED'
 
+# --- telemetry: an F Prime event (MID 0x0802, descriptor 2) as one opaque, exact RECORD
+if tlm.packets(target).key?('FPRIME_EVENTS')
+  record = ['10020001000200000f47ae00090c9000000007'].pack('H*')
+  buf = cfs_hdr(0x0802) + [2].pack('n') + record
+  buf[4, 2] = [buf.bytesize - 7].pack('n')
+  id = identify(tlm, target, buf)
+  puts "identify event -> #{id ? id.packet_name : 'nil'} record=#{id && id.read('RECORD').unpack1('H*')}"
+  raise 'event not identified' unless id && id.packet_name == 'FPRIME_EVENTS'
+  raise 'event record not opaque/exact' unless id.read('RECORD') == record
+  matches = tlm.packets(target).values.count { |p| p.identify?(buf) }
+  raise "event identified by #{matches} packets" unless matches == 1
+end
+
 # --- multi-record TlmChan packet through the READ splitter (two channels in one CCSDS packet)
 if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   OpenC3::ProtocolFprimeChannelSplitter.telemetry_source = -> { tlm }
