@@ -275,17 +275,23 @@ def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dic
     root = generator.write_bundle(app, tmp_path, "AP").directory
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     events = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
-    assert "<%= Ccsds.tlm(@EVENTS_TLM_MID_STR) %>" in events
-    assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 2 " in events
-    assert events.rstrip().endswith(
-        'APPEND_ITEM RECORD 0 BLOCK "Event id, time and arguments as serialized by F Prime"'
-    )
+    # the wire layout the fprime-cosmos cosmos transport relies on: RECORD starts right after the descriptor
+    assert events.splitlines()[1:] == [
+        "  <%= Ccsds.tlm(@EVENTS_TLM_MID_STR) %>",
+        '  APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 2 "F Prime packet descriptor" BIG_ENDIAN',
+        '    META FPRIME_TYPE "FwPacketDescriptorType"',
+        '  APPEND_ITEM RECORD 0 BLOCK "Event id, time and arguments as serialized by F Prime"',
+    ]
     assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in telemetry
     assert "  EVENTS_TLM_MID = '0x0802'" in (root / "lib/fprime_ap_msg_id.rb").read_text()
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["message_ids"]["events"] == "0x0802"
     subpacketized = generator.write_bundle(app, tmp_path / "sub", "AP", subpacketizer=True).directory
-    assert "FPRIME_EVENTS" in (subpacketized / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    sub_tlm = (subpacketized / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    sub_events = sub_tlm[sub_tlm.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
+    assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in sub_tlm
+    assert sub_events.splitlines()[1:] == events.splitlines()[1:]  # a complete CCSDS packet, not a SUBPACKET
+    assert json.loads((subpacketized / "manifest.json").read_text())["message_ids"]["events"] == "0x0802"
 
 
 def test_events_packet_is_skipped_with_a_warning_without_a_log_apid(dictionary, tmp_path):
