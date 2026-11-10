@@ -62,8 +62,20 @@ puts "warnings: #{config.warnings.length}"
 config.warnings.first(10).each { |w| puts "  W: #{w}" }
 tlm = OpenC3::Telemetry.new(config)
 def identify(tlm, target, buf)
-  # COSMOS's own identification (unique-id mode or the first packet's ID items), not a per-packet identify? scan
-  tlm.identify!(buf, [target])
+  # Telemetry#identify's two modes (openc3 7.5.1 packets/telemetry.rb) without System.instance: unique-id mode
+  # scans every packet's identify?; otherwise the FIRST non-virtual packet's ID items key the id-value hash
+  packets = tlm.packets(target).values.reject(&:subpacket)
+  if tlm.tlm_unique_id_mode(target)
+    pkt = packets.find { |p| p.identify?(buf) }
+  else
+    first = packets.find { |p| !p.virtual }
+    hash = tlm.config.tlm_id_value_hash[target]
+    pkt = first && (hash[first.read_id_values(buf)] || hash['CATCHALL'])
+  end
+  return nil unless pkt
+  pkt = pkt.clone
+  pkt.buffer = buf
+  pkt
 end
 cmd = OpenC3::Commands.new(config)
 puts "telemetry packets: #{tlm.packets(target).length}"
