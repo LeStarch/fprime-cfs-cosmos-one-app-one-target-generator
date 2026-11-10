@@ -26,7 +26,12 @@ def two_bundles(dictionary, tmp_path):
     first = generator.write_bundle(app, tmp_path / "gen", "APP_A").directory
     second = generator.write_bundle(app, tmp_path / "gen", "APP_B").directory
     manifest = json.loads((second / "manifest.json").read_text())
-    manifest["message_ids"] = {"command": "0x1900", "packetized_telemetry": "0x0920", "channelized_telemetry": "0x0901"}
+    manifest["message_ids"] = {
+        "command": "0x1900",
+        "packetized_telemetry": "0x0920",
+        "channelized_telemetry": "0x0901",
+        "events": "0x0902",
+    }
     (second / "manifest.json").write_text(json.dumps(manifest))
     return first, second
 
