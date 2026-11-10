@@ -20,6 +20,7 @@ APID_MASK = 0x07FF
 COMMAND_APID = "FW_PACKET_COMMAND"
 CHANNELS_APID = "FW_PACKET_TELEM"
 PACKETS_APID = "FW_PACKET_PACKETIZED_TLM"
+EVENTS_APID = "FW_PACKET_LOG"
 # Ruby conversion: cFS COSMOS targets are Ruby targets
 TIME_CONVERSION = "openc3/conversions/unix_time_conversion.rb"
 
@@ -34,11 +35,14 @@ class CfsApp:
     channels_mid: int
     packets_mid: int
     function_code: int
+    events_mid: int | None = None  # None when ComCfg.Apid has no FW_PACKET_LOG: events are not modeled
 
     def message_ids(self, channelized: bool = True) -> dict[str, int]:
         ids = {"command": self.command_mid, "packetized telemetry": self.packets_mid}
         if channelized:
             ids["channelized telemetry"] = self.channels_mid
+        if self.events_mid is not None:
+            ids["events"] = self.events_mid
         return ids
 
 
@@ -69,4 +73,9 @@ def cfs_app(dictionary: FprimeDictionary) -> CfsApp:
         channels_mid=_stream_id(TELEMETRY_STREAM_ID, apids, CHANNELS_APID, dictionary),
         packets_mid=_stream_id(TELEMETRY_STREAM_ID, apids, PACKETS_APID, dictionary),
         function_code=dictionary.cfs_function_code,
+        events_mid=(
+            _stream_id(TELEMETRY_STREAM_ID, apids, EVENTS_APID, dictionary)
+            if EVENTS_APID in apids and dictionary.layout.log_descriptor is not None
+            else None
+        ),
     )

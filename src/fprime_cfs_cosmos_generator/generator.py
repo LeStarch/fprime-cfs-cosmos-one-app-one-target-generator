@@ -22,6 +22,8 @@ COMMANDS_FILE = "fprime_cmd.txt"
 TELEMETRY_FILE = "fprime_tlm.txt"
 MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
 MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
+EVENTS_PACKET = "FPRIME_EVENTS"
+EVENT_RECORD_ITEM = "RECORD"
 
 
 class GeneratorError(Exception):
@@ -157,12 +159,29 @@ def _telemetry_channel(channel, app: cfs.CfsApp, subpacketizer: bool) -> list[st
     )
 
 
+def _events_packet(app: cfs.CfsApp) -> list[str]:
+    """The F Prime event record (id, time, arguments) as one opaque block, identified by the events MID and the log
+    descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) decodes it exactly,
+    so no event text is reconstructed in COSMOS. Without it nasa's ID-less file packets swallow the event packets."""
+    layout = app.dictionary.layout
+    description = "F Prime event record (opaque; decoded by fprime-gds)"
+    record_description = emit.quote("Event id, time and arguments as serialized by F Prime")
+    lines = _telemetry_header(EVENTS_PACKET, "EVENTS_TLM_MID_STR", description)
+    lines.extend(_big_endian(emit._item_lines(emit._descriptor_item(layout), layout.log_descriptor)))
+    lines.append(f"  APPEND_ITEM {EVENT_RECORD_ITEM} 0 BLOCK {record_description}")
+    return lines
+
+
 def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, subpacketizer: bool = False) -> str:
     """Flat mode (default) works on every COSMOS 6.x; subpacketizer mode needs COSMOS 6.10+ (SUBPACKET keyword)"""
     identifiers = {"PACKETS_TLM_MID_STR": "PACKETS_TLM_MID"}
     if channelized:
         identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
+    if app.events_mid is not None:
+        identifiers["EVENTS_TLM_MID_STR"] = "EVENTS_TLM_MID"
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
+    if app.events_mid is not None:
+        blocks.append("\n".join(_events_packet(app)))
     if subpacketizer:
         blocks.append(
             "\n".join(
@@ -208,6 +227,8 @@ def emit_message_ids(app: cfs.CfsApp, target_name: str, channelized: bool = True
     ]
     if channelized:
         lines.append(f"  CHANNELS_TLM_MID = '{app.channels_mid:#06x}'")
+    if app.events_mid is not None:
+        lines.append(f"  EVENTS_TLM_MID = '{app.events_mid:#06x}'")
     lines.extend(["end", ""])
     return "\n".join(lines)
 
@@ -264,6 +285,8 @@ def _manifest(
     mids = {"command": app.command_mid, "packetized_telemetry": app.packets_mid}
     if channelized:
         mids["channelized_telemetry"] = app.channels_mid
+    if app.events_mid is not None:
+        mids["events"] = app.events_mid
     return {
         "schema_version": 1,
         "target": target_name,

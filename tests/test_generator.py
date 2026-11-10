@@ -103,7 +103,7 @@ def test_subpacketizer_mode_for_cosmos_6_10(dictionary, tmp_path):
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     assert "  SUBPACKETIZER fprime_subpacketizer.rb" in telemetry
     assert "  SUBPACKET\n  SUBPACKET" not in telemetry
-    assert telemetry.count("<%= Ccsds.tlm(") == 2
+    assert telemetry.count("<%= Ccsds.tlm(") == 3  # packets parent, channels parent, events
     assert (root / "lib/fprime_subpacketizer.rb").exists()
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["telemetry_mode"] == "subpacketizer"
@@ -120,6 +120,7 @@ def test_manifest_and_plugin_fragment(dictionary, tmp_path):
         "command": "0x1800",
         "packetized_telemetry": "0x0820",
         "channelized_telemetry": "0x0801",
+        "events": "0x0802",
     }
     fragment = (root / "plugin.fragment.txt").read_text()
     assert "VARIABLE fprime_ap_target_name AP" in fragment
@@ -230,9 +231,14 @@ def _limits(data_type, bit_size, **bounds):
 
     type_object = {"UINT": U32Type, "INT": I32Type, "FLOAT": F64Type}[data_type]
     channel = ChTemplate(
-        1, "ch", "comp", type_object,
-        low_red=bounds.get("rl"), low_yellow=bounds.get("yl"),
-        high_yellow=bounds.get("yh"), high_red=bounds.get("rh"),
+        1,
+        "ch",
+        "comp",
+        type_object,
+        low_red=bounds.get("rl"),
+        low_yellow=bounds.get("yl"),
+        high_yellow=bounds.get("yh"),
+        high_red=bounds.get("rh"),
     )
     lines = emit._channel_modifiers(channel, CosmosItem("ch", bit_size, data_type))
     limits = [line for line in lines if line.startswith("LIMITS")]
@@ -254,3 +260,34 @@ def _limits(data_type, bit_size, **bounds):
 )
 def test_limits_leave_unspecified_sides_open(data_type, bit_size, bounds, expected):
     assert _limits(data_type, bit_size, **bounds) == expected
+
+
+def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    assert app.events_mid == 0x0802
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    events = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
+    assert "<%= Ccsds.tlm(@EVENTS_TLM_MID_STR) %>" in events
+    assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 2 " in events
+    assert events.rstrip().endswith(
+        'APPEND_ITEM RECORD 0 BLOCK "Event id, time and arguments as serialized by F Prime"'
+    )
+    assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in telemetry
+    assert "  EVENTS_TLM_MID = '0x0802'" in (root / "lib/fprime_ap_msg_id.rb").read_text()
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["message_ids"]["events"] == "0x0802"
+    subpacketized = generator.write_bundle(app, tmp_path / "sub", "AP", subpacketizer=True).directory
+    assert "FPRIME_EVENTS" in (subpacketized / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+
+
+def test_events_packet_is_skipped_without_a_log_apid(dictionary, tmp_path):
+    from unittest.mock import patch
+
+    with patch.object(dictionary, "apids", {k: v for k, v in dictionary.apids.items() if k != "FW_PACKET_LOG"}):
+        app = cfs.cfs_app(dictionary)
+    assert app.events_mid is None
+    root = generator.write_bundle(app, tmp_path, "AP").directory
+    assert "FPRIME_EVENTS" not in (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    assert "EVENTS_TLM_MID" not in (root / "lib/fprime_ap_msg_id.rb").read_text()
+    assert "events" not in json.loads((root / "manifest.json").read_text())["message_ids"]

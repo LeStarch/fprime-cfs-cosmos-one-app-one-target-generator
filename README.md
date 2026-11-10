@@ -250,6 +250,13 @@ dependencies are redundant and harmless.
 - **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
   F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
+In both modes the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `ComCfg.Apid.FW_PACKET_LOG`,
+`FPRIME_DESCRIPTOR` = the log descriptor) with the whole event record (id, time, arguments) as one opaque `RECORD`
+block. COSMOS shows the record as raw bytes; readable events come from the fprime-gds event decoder through the
+[fprime-cosmos](https://github.com/fprime-community/fprime-cosmos) `cosmos` data transport (`--cosmos-layout cfs`),
+which decodes the block exactly. Without this packet nasa's ID-less file packets (`TA_AFFINITY_FILE`, ...) swallow
+the event packets. The packet is omitted when `ComCfg.Apid` has no `FW_PACKET_LOG`.
+
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte
 telemetry header; `--header12` swaps in the 12-byte header stub of `tests/cosmos/stubs/header12`), identifies a
