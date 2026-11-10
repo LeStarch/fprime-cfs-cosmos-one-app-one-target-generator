@@ -276,7 +276,9 @@ def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dic
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     events = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
     # the wire layout the fprime-cosmos cosmos transport relies on: RECORD starts right after the descriptor
-    assert events.splitlines()[1:] == [
+    assert events.splitlines() == [
+        "TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS <%= Globals::Cfg.processor_endian %> "
+        '"F Prime event record (opaque; decoded by fprime-gds)"',
         "  <%= Ccsds.tlm(@EVENTS_TLM_MID_STR) %>",
         '  APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 2 "F Prime packet descriptor" BIG_ENDIAN',
         '    META FPRIME_TYPE "FwPacketDescriptorType"',
@@ -290,7 +292,7 @@ def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dic
     sub_tlm = (subpacketized / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     sub_events = sub_tlm[sub_tlm.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
     assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in sub_tlm
-    assert sub_events.splitlines()[1:] == events.splitlines()[1:]  # a complete CCSDS packet, not a SUBPACKET
+    assert sub_events.splitlines() == events.splitlines()  # a complete CCSDS packet, not a SUBPACKET
     assert json.loads((subpacketized / "manifest.json").read_text())["message_ids"]["events"] == "0x0802"
 
 
@@ -301,8 +303,11 @@ def test_events_packet_is_skipped_with_a_warning_without_a_log_apid(dictionary, 
     ):
         app = cfs.cfs_app(dictionary)
     assert app.events_mid is None
+    assert "events" not in app.message_ids()
     root = generator.write_bundle(app, tmp_path, "AP").directory
-    assert "FPRIME_EVENTS" not in (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    assert "FPRIME_EVENTS" not in telemetry
+    assert "EVENTS_TLM_MID" not in telemetry  # a preamble reference without the constant breaks plugin install
     assert "EVENTS_TLM_MID" not in (root / "lib/fprime_ap_msg_id.rb").read_text()
     assert "events" not in json.loads((root / "manifest.json").read_text())["message_ids"]
 
@@ -316,6 +321,24 @@ def test_reserved_packet_names_are_refused(dictionary, tmp_path, name):
         pytest.raises(generator.GeneratorError, match="collides"),
     ):
         generator.write_bundle(app, tmp_path, "AP")
+    assert not (tmp_path / "AP").exists()  # refused before anything is written: the output stays reusable
+    assert generator.write_bundle(app, tmp_path, "AP").manifest_path.is_file()
+
+
+def test_duplicate_message_ids_are_refused(dictionary, tmp_path):
+    app = dataclasses.replace(cfs.cfs_app(dictionary), events_mid=cfs.cfs_app(dictionary).packets_mid)
+    with pytest.raises(generator.GeneratorError, match="must be distinct"):
+        generator.write_bundle(app, tmp_path, "AP")
+
+
+def test_events_mid_without_a_log_packet_type_fails_loudly(dictionary, tmp_path):
+    types = {k: v for k, v in dictionary.layout.packet_types.items() if k != "FW_PACKET_LOG"}
+    with patch.object(dictionary, "layout", dataclasses.replace(dictionary.layout, packet_types=types)):
+        with pytest.warns(UserWarning):
+            app = dataclasses.replace(cfs.cfs_app(dictionary), events_mid=0x0802)  # the cfs_app() guard bypassed
+        with pytest.raises(generator.GeneratorError, match="FW_PACKET_LOG"):
+            generator.write_bundle(app, tmp_path, "AP")
+    assert not (tmp_path / "AP" / "manifest.json").exists()
 
 
 def test_events_packet_is_skipped_without_a_log_packet_type(dictionary, tmp_path):
@@ -327,8 +350,11 @@ def test_events_packet_is_skipped_without_a_log_packet_type(dictionary, tmp_path
         assert dictionary.layout.log_descriptor is None
         app = cfs.cfs_app(dictionary)
     assert app.events_mid is None
+    assert "events" not in app.message_ids()
     root = generator.write_bundle(app, tmp_path, "AP").directory
-    assert "FPRIME_EVENTS" not in (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    assert "FPRIME_EVENTS" not in telemetry
+    assert "EVENTS_TLM_MID" not in telemetry  # a preamble reference without the constant breaks plugin install
 
 
 def test_events_apid_must_be_eleven_bits(dictionary):

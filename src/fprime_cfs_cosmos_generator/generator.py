@@ -165,6 +165,8 @@ def _events_packet(app: cfs.CfsApp) -> list[str]:
     descriptor; the fprime-gds event decoder (through the fprime-cosmos ``cosmos`` data transport) decodes it exactly,
     so no event text is reconstructed in COSMOS. Without it nasa's ID-less file packets swallow the event packets."""
     layout = app.dictionary.layout
+    if layout.log_descriptor is None:
+        raise GeneratorError(f"{app.name}: events_mid is set but the packet-type enumeration has no FW_PACKET_LOG")
     description = "F Prime event record (opaque; decoded by fprime-gds)"
     record_description = emit.quote("Event id, time and arguments as serialized by F Prime")
     lines = _telemetry_header(EVENTS_PACKET, "EVENTS_TLM_MID_STR", description)
@@ -180,9 +182,6 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
         identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
     if app.events_mid is not None:
         identifiers["EVENTS_TLM_MID_STR"] = "EVENTS_TLM_MID"
-    for packet in app.dictionary.packets:
-        if emit.full_name(packet).upper() in RESERVED_PACKETS:
-            raise GeneratorError(f"Dictionary packet {packet.get_name()!r} collides with the bundle's reserved packet")
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
     if app.events_mid is not None:
         blocks.append("\n".join(_events_packet(app)))
@@ -307,6 +306,13 @@ def _manifest(
     }
 
 
+def _check_packet_names(app: cfs.CfsApp) -> None:
+    """A dictionary packet named like one of the bundle's own packets would define it twice in COSMOS"""
+    for packet in app.dictionary.packets:
+        if emit.full_name(packet).upper() in RESERVED_PACKETS:
+            raise GeneratorError(f"Dictionary packet {packet.get_name()!r} collides with the bundle's reserved packet")
+
+
 def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manifests: tuple[Path, ...]) -> None:
     requested = app.message_ids(channelized)
     if len(set(requested.values())) != len(requested):
@@ -343,6 +349,7 @@ def write_bundle(
     if not TARGET_NAME.fullmatch(target_name):
         raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
     _check_reserved(app, target_name, channelized, reserved_manifests)
+    _check_packet_names(app)
     output = Path(output) / target_name
     if output.exists():
         if not (output / "manifest.json").is_file():

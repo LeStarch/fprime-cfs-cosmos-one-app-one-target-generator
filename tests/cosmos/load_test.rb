@@ -109,10 +109,12 @@ id = identify(tlm, target, buf)
 puts "identify channel -> #{id ? id.packet_name : 'nil'} value=#{id && id.read('CommandsDispatched')}"
 raise 'channel not identified' unless id && id.packet_name.upcase == 'CFSCORE.CMDDISP.COMMANDSDISPATCHED'
 
-# --- telemetry: an F Prime event (MID 0x0802, descriptor 2) as one opaque, exact RECORD
-if tlm.packets(target).key?('FPRIME_EVENTS')
+# --- telemetry: an F Prime event (events MID, descriptor 2) as one opaque, exact RECORD; driven by the bundle's manifest
+events_mid = JSON.parse(File.read("#{bundle}/manifest.json"))['message_ids']['events']
+if events_mid
+  raise 'manifest declares an events MID but the target has no FPRIME_EVENTS packet' unless tlm.packets(target).key?('FPRIME_EVENTS')
   record = ['10020001000200000f47ae00090c9000000007'].pack('H*')
-  buf = cfs_hdr(0x0802) + [2].pack('n') + record
+  buf = cfs_hdr(Integer(events_mid)) + [2].pack('n') + record
   buf[4, 2] = [buf.bytesize - 7].pack('n')
   id = identify(tlm, target, buf)
   puts "identify event -> #{id ? id.packet_name : 'nil'} record=#{id && id.read('RECORD').unpack1('H*')}"
@@ -120,6 +122,11 @@ if tlm.packets(target).key?('FPRIME_EVENTS')
   raise 'event record not opaque/exact' unless id.read('RECORD') == record
   matches = tlm.packets(target).values.count { |p| p.identify?(buf) }
   raise "event identified by #{matches} packets" unless matches == 1
+  stray = buf.dup
+  stray[cfs_hdr(Integer(events_mid)).bytesize, 2] = [1].pack('n') # same MID, telemetry descriptor: not an event
+  raise 'descriptor does not discriminate FPRIME_EVENTS' if tlm.packets(target).values.any? { |p| p.identify?(stray) }
+else
+  puts 'SKIP events: bundle has no events MID (no FW_PACKET_LOG in the dictionary)'
 end
 
 # --- multi-record TlmChan packet through the READ splitter (two channels in one CCSDS packet)
