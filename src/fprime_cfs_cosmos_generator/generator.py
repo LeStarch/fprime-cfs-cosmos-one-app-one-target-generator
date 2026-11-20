@@ -22,6 +22,10 @@ COMMANDS_FILE = "fprime_cmd.txt"
 TELEMETRY_FILE = "fprime_tlm.txt"
 MESSAGE_IDS_FILE = "fprime_{target}_msg_id.rb"
 MESSAGE_IDS_MODULE = "FprimeMsgId_{target}"
+# The telemetry component of the topology: Svc.TlmPacketizer downlinks packets, Svc.TlmChan channel records
+PACKETIZER = "packetizer"
+CHANNELIZER = "channelizer"
+TELEMETRY_SOURCES = (PACKETIZER, CHANNELIZER)
 
 
 class GeneratorError(Exception):
@@ -157,13 +161,22 @@ def _telemetry_channel(channel, app: cfs.CfsApp, subpacketizer: bool) -> list[st
     )
 
 
-def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, subpacketizer: bool = False) -> str:
+def _check_source(telemetry_source: str) -> bool:
+    """True for channelized telemetry, False for packetized telemetry"""
+    if telemetry_source not in TELEMETRY_SOURCES:
+        raise GeneratorError(f"Telemetry source {telemetry_source!r} must be one of: {', '.join(TELEMETRY_SOURCES)}")
+    return telemetry_source == CHANNELIZER
+
+
+def emit_telemetry(app: cfs.CfsApp, target_name: str, telemetry_source: str, subpacketizer: bool = False) -> str:
     """Flat mode (default) works on every COSMOS 6.x; subpacketizer mode needs COSMOS 6.10+ (SUBPACKET keyword)"""
-    identifiers = {"PACKETS_TLM_MID_STR": "PACKETS_TLM_MID"}
+    channelized = _check_source(telemetry_source)
     if channelized:
-        identifiers["CHANNELS_TLM_MID_STR"] = "CHANNELS_TLM_MID"
+        identifiers = {"CHANNELS_TLM_MID_STR": "CHANNELS_TLM_MID"}
+    else:
+        identifiers = {"PACKETS_TLM_MID_STR": "PACKETS_TLM_MID"}
     blocks = ["\n".join(_preamble(target_name, identifiers)).rstrip()]
-    if subpacketizer:
+    if subpacketizer and not channelized:
         blocks.append(
             "\n".join(
                 _telemetry_parent(
@@ -175,8 +188,9 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
                 )
             )
         )
-    blocks.extend("\n".join(_telemetry_packet(packet, app, subpacketizer)) for packet in app.dictionary.packets)
-    if channelized:
+    if not channelized:
+        blocks.extend("\n".join(_telemetry_packet(packet, app, subpacketizer)) for packet in app.dictionary.packets)
+    else:
         if subpacketizer:
             blocks.append(
                 "\n".join(
@@ -199,15 +213,16 @@ def emit_telemetry(app: cfs.CfsApp, target_name: str, channelized: bool = True, 
     return "\n\n".join(blocks) + "\n"
 
 
-def emit_message_ids(app: cfs.CfsApp, target_name: str, channelized: bool = True) -> str:
+def emit_message_ids(app: cfs.CfsApp, target_name: str, telemetry_source: str) -> str:
     lines = [
         f"# Generated F Prime cFS message identifiers for {target_name}. Do not edit.",
         f"module {MESSAGE_IDS_MODULE.format(target=target_name)}",
         f"  CMD_MID = '{app.command_mid:#06x}'",
-        f"  PACKETS_TLM_MID = '{app.packets_mid:#06x}'",
     ]
-    if channelized:
+    if _check_source(telemetry_source):
         lines.append(f"  CHANNELS_TLM_MID = '{app.channels_mid:#06x}'")
+    else:
+        lines.append(f"  PACKETS_TLM_MID = '{app.packets_mid:#06x}'")
     lines.extend(["end", ""])
     return "\n".join(lines)
 
@@ -223,7 +238,8 @@ def emit_target() -> str:
     )
 
 
-def emit_plugin_fragment(target_name: str, channelized: bool = True, subpacketizer: bool = False) -> str:
+def emit_plugin_fragment(target_name: str, telemetry_source: str, subpacketizer: bool = False) -> str:
+    channelized = _check_source(telemetry_source)
     variable = f"fprime_{target_name.lower()}_target_name"
     protocols = ["  PROTOCOL WRITE ProtocolCcsdsChecksumCompat"]
     if channelized and not subpacketizer:
@@ -242,7 +258,8 @@ def emit_plugin_fragment(target_name: str, channelized: bool = True, subpacketiz
     )
 
 
-def _runtime_files(channelized: bool, subpacketizer: bool) -> tuple[str, ...]:
+def _runtime_files(telemetry_source: str, subpacketizer: bool) -> tuple[str, ...]:
+    channelized = _check_source(telemetry_source)
     files = [CHECKSUM_PROTOCOL]
     if subpacketizer:
         files.append(SUBPACKETIZER)
@@ -251,19 +268,21 @@ def _runtime_files(channelized: bool, subpacketizer: bool) -> tuple[str, ...]:
     return tuple(files)
 
 
-def _copy_runtime(output: Path, channelized: bool, subpacketizer: bool) -> None:
+def _copy_runtime(output: Path, telemetry_source: str, subpacketizer: bool) -> None:
     output.mkdir(parents=True, exist_ok=True)
-    for name in _runtime_files(channelized, subpacketizer):
+    for name in _runtime_files(telemetry_source, subpacketizer):
         with resources.as_file(RUNTIME / name) as source:
             shutil.copy2(source, output / name)
 
 
 def _manifest(
-    app: cfs.CfsApp, target_name: str, channelized: bool, subpacketizer: bool, dictionary: FprimeDictionary
+    app: cfs.CfsApp, target_name: str, telemetry_source: str, subpacketizer: bool, dictionary: FprimeDictionary
 ) -> dict:
-    mids = {"command": app.command_mid, "packetized_telemetry": app.packets_mid}
-    if channelized:
+    mids = {"command": app.command_mid}
+    if _check_source(telemetry_source):
         mids["channelized_telemetry"] = app.channels_mid
+    else:
+        mids["packetized_telemetry"] = app.packets_mid
     return {
         "schema_version": 1,
         "target": target_name,
@@ -271,17 +290,18 @@ def _manifest(
         "dictionary": dictionary.path.name,
         "dictionary_sha256": hashlib.sha256(dictionary.path.read_bytes()).hexdigest(),
         "function_code": app.function_code,
+        "telemetry_source": telemetry_source,
         "telemetry_mode": "subpacketizer" if subpacketizer else "flat",
         "minimum_cosmos_version": "6.10.0" if subpacketizer else "6.0.0",
         "message_ids": {name: f"{mid:#06x}" for name, mid in mids.items()},
         "target_files": [f"targets/{target_name}", f"lib/{message_ids_file(target_name)}"],
-        "shared_files": [f"lib/{name}" for name in _runtime_files(channelized, subpacketizer)],
+        "shared_files": [f"lib/{name}" for name in _runtime_files(telemetry_source, subpacketizer)],
         "required_helpers": ["global_defs", "cfs_ccsds", "fsw_msg_id", "fsw_config_param"],
     }
 
 
-def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manifests: tuple[Path, ...]) -> None:
-    requested = app.message_ids(channelized)
+def _check_reserved(app: cfs.CfsApp, target_name: str, telemetry_source: str, manifests: tuple[Path, ...]) -> None:
+    requested = app.message_ids(_check_source(telemetry_source))
     if len(set(requested.values())) != len(requested):
         raise GeneratorError(f"{app.name}: command and telemetry message identifiers must be distinct")
     for path in manifests:
@@ -307,15 +327,17 @@ def _check_reserved(app: cfs.CfsApp, target_name: str, channelized: bool, manife
 def write_bundle(
     app: cfs.CfsApp,
     output: Path,
+    telemetry_source: str,
     target_name: str | None = None,
-    channelized: bool = True,
     reserved_manifests: tuple[Path, ...] = (),
     subpacketizer: bool = False,
 ) -> BundleArtifacts:
     target_name = (target_name or app.name).upper()
     if not TARGET_NAME.fullmatch(target_name):
         raise GeneratorError(f"Target name {target_name!r} must contain only letters, digits, and underscores")
-    _check_reserved(app, target_name, channelized, reserved_manifests)
+    if not _check_source(telemetry_source) and not app.dictionary.packets:
+        raise GeneratorError(f"{app.name}: telemetry source {PACKETIZER} needs a dictionary with telemetry packets")
+    _check_reserved(app, target_name, telemetry_source, reserved_manifests)
     output = Path(output) / target_name
     if output.exists():
         if not (output / "manifest.json").is_file():
@@ -325,14 +347,14 @@ def write_bundle(
     cmd_tlm.mkdir(parents=True)
     (cmd_tlm.parent / "target.txt").write_text(emit_target())
     (cmd_tlm / COMMANDS_FILE).write_text(emit_commands(app, target_name))
-    (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, channelized, subpacketizer))
+    (cmd_tlm / TELEMETRY_FILE).write_text(emit_telemetry(app, target_name, telemetry_source, subpacketizer))
     lib = output / "lib"
-    _copy_runtime(lib, channelized, subpacketizer)
-    (lib / message_ids_file(target_name)).write_text(emit_message_ids(app, target_name, channelized))
-    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name, channelized, subpacketizer))
+    _copy_runtime(lib, telemetry_source, subpacketizer)
+    (lib / message_ids_file(target_name)).write_text(emit_message_ids(app, target_name, telemetry_source))
+    (output / "plugin.fragment.txt").write_text(emit_plugin_fragment(target_name, telemetry_source, subpacketizer))
     manifest_path = output / "manifest.json"
     manifest_path.write_text(
-        json.dumps(_manifest(app, target_name, channelized, subpacketizer, app.dictionary), indent=2) + "\n"
+        json.dumps(_manifest(app, target_name, telemetry_source, subpacketizer, app.dictionary), indent=2) + "\n"
     )
     return BundleArtifacts(output, target_name, manifest_path)
 
@@ -340,13 +362,13 @@ def write_bundle(
 def build_bundle(
     dictionary_path: str | Path,
     output: str | Path,
+    telemetry_source: str,
     target_name: str | None = None,
     packet_set_name: str | None = None,
-    channelized: bool = True,
     reserved_manifests: tuple[Path, ...] = (),
     subpacketizer: bool = False,
 ) -> BundleArtifacts:
     dictionary = FprimeDictionary(dictionary_path, packet_set_name)
     return write_bundle(
-        cfs.cfs_app(dictionary), Path(output), target_name, channelized, reserved_manifests, subpacketizer
+        cfs.cfs_app(dictionary), Path(output), telemetry_source, target_name, reserved_manifests, subpacketizer
     )

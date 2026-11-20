@@ -8,9 +8,16 @@ destination cFS COSMOS plugin.
 fprime-to-cfs-cosmos-target \
   --dictionary FPrimeDeploymentTopologyDictionary.json \
   --output build/generated \
+  --telemetry-source packetizer \
   --target-name FPRIME_APP \
   --reserved-manifest build/generated/OTHER_APP/manifest.json
 ```
+
+`--telemetry-source` is required and has no default: `packetizer` when the topology downlinks telemetry through
+`Svc.TlmPacketizer` (only the packets of the packet set are defined, on the `FW_PACKET_PACKETIZED_TLM` MID),
+`channelizer` when it uses `Svc.TlmChan` (only per-channel definitions, on the `FW_PACKET_TELEM` MID). The
+dictionary does not record which component the topology uses, so the generator cannot choose. The bundle's
+`manifest.json` records the choice as `telemetry_source` and reserves only the telemetry MID it uses.
 
 The output contains:
 
@@ -208,8 +215,10 @@ register_fprime_module(
 
 It runs after fpp in the same autocoder set, reads the dictionary fpp declared and writes the bundle to
 `${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>/<TARGET>/` through a `<Deployment>_cfs_cosmos` target the module
-depends on (`cfs_cosmos` builds them all). Extra generator flags: cache variables `FPRIME_CFS_COSMOS_ARGS` and
-`FPRIME_CFS_COSMOS_ARGS_<Deployment>`, e.g. `-DFPRIME_CFS_COSMOS_ARGS=--no-channelized`.
+depends on (`cfs_cosmos` builds them all). Generator flags come from the cache variables `FPRIME_CFS_COSMOS_ARGS` and
+`FPRIME_CFS_COSMOS_ARGS_<Deployment>`; one of them must carry the required telemetry source, e.g.
+`-DFPRIME_CFS_COSMOS_ARGS=--telemetry-source=packetizer` (use the `=` form: each variable is passed as given, and
+several flags are a `;`-separated list). Without it the bundle step of the build fails.
 
 ```cmake
 fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin"
@@ -241,19 +250,20 @@ dependencies are redundant and harmless.
 
 ## Telemetry modes
 
-- **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the
+- **flat** (default): every F Prime packet (`--telemetry-source packetizer`) or channel (`channelizer`) is its
+  own `TELEMETRY` packet carrying the
   `Ccsds.tlm` header plus `FPRIME_DESCRIPTOR`/`FPRIME_PACKET_ID` (or `FPRIME_CHANNEL_ID`) ID items.
   Works on every COSMOS 6.x. `TlmPacketizer` packets arrive one per CCSDS packet. `TlmChan` packs several
-  channel records into one CCSDS packet, so the bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
+  channel records into one CCSDS packet, so a channelizer bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
   protocol (wired by the fragment) that splits such a packet into one COSMOS packet per record, each with a
   copy of the cFS header and descriptor.
-- **`--subpacketizer`**: one parent packet per MID with a `SUBPACKETIZER` and one `SUBPACKET` per
-  F Prime packet/channel. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
+- **`--subpacketizer`**: one parent packet for the telemetry MID with a `SUBPACKETIZER` and one `SUBPACKET` per
+  F Prime packet (packetizer) or channel (channelizer). Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte
 telemetry header; `--header12` swaps in the 12-byte header stub of `tests/cosmos/stubs/header12`), identifies a
-packet and a channel, splits a multi-record channel packet, builds a command and checks the checksum protocol;
+packet (packetizer bundle) or a channel and a split multi-record channel packet (channelizer bundle), builds a command and checks the checksum protocol;
 `--nasa` additionally compares the helpers' header items with the plugin's `cfs_packet_headers.rb`; `--image`
 substitutes an image reference (e.g. digest-pinned) for `openc3inc/openc3-cosmos-cmd-tlm-api:<version>`.
 
