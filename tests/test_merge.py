@@ -23,10 +23,10 @@ PLUGIN = textwrap.dedent(
 @pytest.fixture
 def two_bundles(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    first = generator.write_bundle(app, tmp_path / "gen", "APP_A").directory
-    second = generator.write_bundle(app, tmp_path / "gen", "APP_B").directory
+    first = generator.write_bundle(app, tmp_path / "gen", "channelizer", "APP_A").directory
+    second = generator.write_bundle(app, tmp_path / "gen", "channelizer", "APP_B").directory
     manifest = json.loads((second / "manifest.json").read_text())
-    manifest["message_ids"] = {"command": "0x1900", "packetized_telemetry": "0x0920", "channelized_telemetry": "0x0901"}
+    manifest["message_ids"] = {"command": "0x1900", "channelized_telemetry": "0x0901"}
     (second / "manifest.json").write_text(json.dumps(manifest))
     return first, second
 
@@ -91,8 +91,8 @@ def test_merge_rejects_mid_and_target_collisions(two_bundles, plugin, tmp_path):
     with pytest.raises(merge.MergeError, match="0x1800"):
         merge.merge(plugin, [first, second])
     reserved = tmp_path / "ordinary.json"
-    reserved.write_text(json.dumps({"target": "TO", "message_ids": {"hk": "0x0820"}}))
-    with pytest.raises(merge.MergeError, match="0x0820"):
+    reserved.write_text(json.dumps({"target": "TO", "message_ids": {"hk": "0x0801"}}))
+    with pytest.raises(merge.MergeError, match="0x0801"):
         merge.merge(plugin, [first], reserved_manifests=(reserved,))
     assert not (plugin / "targets/APP_A").exists()
 

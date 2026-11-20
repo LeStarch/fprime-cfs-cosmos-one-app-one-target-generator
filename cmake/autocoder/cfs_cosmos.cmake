@@ -15,12 +15,13 @@
 # `fprime-to-cfs-cosmos-target --dictionary <json> --output ${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>`,
 # yielding `<Deployment>_cfs_cosmos` (the module depends on it) and the global `cfs_cosmos` target.
 # Extra generator arguments: FPRIME_CFS_COSMOS_ARGS and FPRIME_CFS_COSMOS_ARGS_<Deployment>.
+# The generator requires `--telemetry-source=packetizer|channelizer`; pass it through one of them.
 ####
 include_guard()
 include(autocoder/helpers)
 autocoder_setup_for_individual_sources()
 
-set(FPRIME_CFS_COSMOS_ARGS "" CACHE STRING "Extra fprime-to-cfs-cosmos-target arguments for every deployment")
+set(FPRIME_CFS_COSMOS_ARGS "" CACHE STRING "Extra fprime-to-cfs-cosmos-target arguments for every deployment (--telemetry-source=... is required)")
 set(FPRIME_CFS_COSMOS_OUTPUT "${CMAKE_BINARY_DIR}/cfs-cosmos" CACHE PATH "Where deployment bundles are generated")
 
 ####

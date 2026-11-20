@@ -3,6 +3,7 @@
 #   header16 (default): the shipped runtime/compat helpers (/compat), cFE 7 16-byte telemetry header
 #   header12: the 12-byte header stub (/stubs/header12) ahead of /compat on the load path
 #   nasa_plugin_dir: compare the shipped helpers' header items with its cfs_packet_headers.rb
+require 'json'
 require 'openc3'
 require 'openc3/packets/packet_config'
 require 'openc3/packets/telemetry'
@@ -71,6 +72,15 @@ cmd = OpenC3::Commands.new(config)
 puts "telemetry packets: #{tlm.packets(target).length}"
 puts "command packets: #{cmd.packets(target).length}"
 
+# A bundle defines the telemetry of one source: packets (TlmPacketizer) or channels (TlmChan), never both
+source = JSON.parse(File.read("#{bundle}/manifest.json"))['telemetry_source']
+puts "telemetry source: #{source}"
+raise "unknown telemetry source #{source.inspect}" unless %w[packetizer channelizer].include?(source)
+names = tlm.packets(target).values
+raise 'channel definitions in a packetizer bundle' if source == 'packetizer' && names.any? { |p| p.items.key?('FPRIME_CHANNEL_ID') }
+raise 'packet definitions in a channelizer bundle' if source == 'channelizer' && names.any? { |p| p.items.key?('FPRIME_PACKET_ID') }
+
+if source == 'packetizer'
 # --- telemetry: Health packet (MID 0x0820, descriptor 32, packet id 1) with cFS header
 hdr = cfs_hdr(0x0820)
 health = tlm.packet(target, 'Health')
@@ -98,6 +108,9 @@ states = limited.map { |item| [item.name, id.get_item(item.name).limits.state] }
 puts "  limits at zero: #{states.map { |n, st| "#{n}=#{st}" }.join(' ')}"
 raise 'false limits violation at 0' unless states.all? { |_n, st| st == :GREEN }
 
+end
+
+if source == 'channelizer'
 # --- telemetry: a channel (MID 0x0801, descriptor 1, channel id of CommandsDispatched)
 chan = tlm.packet(target, 'CfsCore.cmdDisp.CommandsDispatched')
 chan_id = chan.get_item('FPRIME_CHANNEL_ID').id_value
@@ -174,6 +187,8 @@ if defined?(OpenC3::ProtocolFprimeChannelSplitter)
   raise 'short channel packet must pass through' unless kept == short && rest == :STOP
   one_byte, = splitter.read_data("\x08")
   raise 'one-byte buffer must pass through' unless one_byte == "\x08"
+end
+
 end
 
 # --- command: NO_OP_STRING then checksum protocol
