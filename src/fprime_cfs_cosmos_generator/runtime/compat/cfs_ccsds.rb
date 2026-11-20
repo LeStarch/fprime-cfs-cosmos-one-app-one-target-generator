@@ -6,7 +6,7 @@
 #   telemetry: 6-byte primary header + seconds + subseconds + 4 spare bytes  (payload at byte 16)
 # PACKET_TIME is not derived here: its READ_CONVERSION (unix_time_conversion_epoch_offset.rb) lives in another
 # target's lib directory, which a per-target decom microservice cannot load. The generated FPRIME_TIME item
-# carries the F Prime timestamp instead.
+# carries the F Prime timestamp instead (FPRIME_EVENTS has none: its time is inside the opaque RECORD).
 module Ccsds
   CMD_SECONDARY_HEADER_BYTES = 2
 
