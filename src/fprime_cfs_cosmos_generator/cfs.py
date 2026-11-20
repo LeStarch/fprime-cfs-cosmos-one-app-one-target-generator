@@ -38,10 +38,12 @@ class CfsApp:
     function_code: int
     events_mid: int | None = None  # None (events not modeled) when ComCfg.Apid or the packet types lack FW_PACKET_LOG
 
-    def message_ids(self, channelized: bool = True) -> dict[str, int]:
-        ids = {"command": self.command_mid, "packetized telemetry": self.packets_mid}
+    def message_ids(self, channelized: bool) -> dict[str, int]:
+        """Identifiers the target uses: commands plus the one telemetry stream of its telemetry component"""
         if channelized:
-            ids["channelized telemetry"] = self.channels_mid
+            ids = {"command": self.command_mid, "channelized telemetry": self.channels_mid}
+        else:
+            ids = {"command": self.command_mid, "packetized telemetry": self.packets_mid}
         if self.events_mid is not None:
             ids["events"] = self.events_mid
         return ids

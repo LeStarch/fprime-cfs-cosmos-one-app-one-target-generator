@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .dictionary import DictionaryError
-from .generator import GeneratorError, build_bundle
+from .generator import TELEMETRY_SOURCES, GeneratorError, build_bundle
 
 
 def parser() -> argparse.ArgumentParser:
@@ -24,7 +24,13 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="Manifest from another generated app or ordinary cFS ID inventory; repeat to reject collisions",
     )
-    result.add_argument("--no-channelized", action="store_true", help="Do not generate channelized telemetry")
+    result.add_argument(
+        "--telemetry-source",
+        required=True,
+        choices=TELEMETRY_SOURCES,
+        help="Telemetry component of the topology: packetizer (Svc.TlmPacketizer, packet definitions only) or "
+        "channelizer (Svc.TlmChan, per-channel definitions only)",
+    )
     result.add_argument(
         "--subpacketizer",
         action="store_true",
@@ -41,9 +47,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         artifacts = build_bundle(
             arguments.dictionary,
             arguments.output,
+            arguments.telemetry_source,
             arguments.target_name,
             arguments.packet_set_name,
-            not arguments.no_channelized,
             tuple(arguments.reserved_manifest),
             arguments.subpacketizer,
         )

@@ -8,9 +8,16 @@ destination cFS COSMOS plugin.
 fprime-to-cfs-cosmos-target \
   --dictionary FPrimeDeploymentTopologyDictionary.json \
   --output build/generated \
+  --telemetry-source packetizer \
   --target-name FPRIME_APP \
   --reserved-manifest build/generated/OTHER_APP/manifest.json
 ```
+
+`--telemetry-source` is required and has no default: `packetizer` when the topology downlinks telemetry through
+`Svc.TlmPacketizer` (only the packets of the packet set are defined, on the `FW_PACKET_PACKETIZED_TLM` MID),
+`channelizer` when it uses `Svc.TlmChan` (only per-channel definitions, on the `FW_PACKET_TELEM` MID). The
+dictionary does not record which component the topology uses, so the generator cannot choose. The bundle's
+`manifest.json` records the choice as `telemetry_source` and reserves only the telemetry MID it uses.
 
 The output contains:
 
@@ -209,8 +216,10 @@ register_fprime_module(
 
 It runs after fpp in the same autocoder set, reads the dictionary fpp declared and writes the bundle to
 `${CMAKE_BINARY_DIR}/cfs-cosmos/<Deployment>/<TARGET>/` through a `<Deployment>_cfs_cosmos` target the module
-depends on (`cfs_cosmos` builds them all). Extra generator flags: cache variables `FPRIME_CFS_COSMOS_ARGS` and
-`FPRIME_CFS_COSMOS_ARGS_<Deployment>`, e.g. `-DFPRIME_CFS_COSMOS_ARGS=--no-channelized`.
+depends on (`cfs_cosmos` builds them all). Generator flags come from the cache variables `FPRIME_CFS_COSMOS_ARGS` and
+`FPRIME_CFS_COSMOS_ARGS_<Deployment>`; one of them must carry the required telemetry source, e.g.
+`-DFPRIME_CFS_COSMOS_ARGS=--telemetry-source=packetizer` (use the `=` form: each variable is passed as given, and
+several flags are a `;`-separated list). Without it the bundle step of the build fails.
 
 ```cmake
 fprime_cfs_cosmos_merge(PLUGIN_DIR "${CMAKE_SOURCE_DIR}/../my-cfs-cosmos-plugin"
@@ -242,17 +251,18 @@ dependencies are redundant and harmless.
 
 ## Telemetry modes
 
-- **flat** (default): every F Prime packet and channel is its own `TELEMETRY` packet carrying the
+- **flat** (default): every F Prime packet (`--telemetry-source packetizer`) or channel (`channelizer`) is its
+  own `TELEMETRY` packet carrying the
   `Ccsds.tlm` header plus `FPRIME_DESCRIPTOR`/`FPRIME_PACKET_ID` (or `FPRIME_CHANNEL_ID`) ID items.
   Works on every COSMOS 6.x: `target.txt` sets `TLM_UNIQUE_ID_MODE`, which COSMOS < 6.10 needs to identify packets
   whose ID items differ (6.10+ detects it and ignores the keyword). `TlmPacketizer` packets arrive one per CCSDS packet. `TlmChan` packs several
-  channel records into one CCSDS packet, so the bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
+  channel records into one CCSDS packet, so a channelizer bundle ships `ProtocolFprimeChannelSplitter`, a `READ`
   protocol (wired by the fragment) that splits such a packet into one COSMOS packet per record, each with a
   copy of the cFS header and descriptor.
-- **`--subpacketizer`**: one parent packet per packet/channel MID with a `SUBPACKETIZER` and one `SUBPACKET` per
-  F Prime packet/channel; `FPRIME_EVENTS` (below) stays a plain packet in this mode too. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
+- **`--subpacketizer`**: one parent packet for the telemetry MID with a `SUBPACKETIZER` and one `SUBPACKET` per
+  F Prime packet (packetizer) or channel (channelizer); `FPRIME_EVENTS` (below) stays a plain packet in this mode too. Requires COSMOS 6.10.0 or newer (`SUBPACKET` is not a keyword in 6.9.1).
 
-In both modes, and with or without `--no-channelized`, the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `0x0800 |
+In both modes and for either `--telemetry-source`, the bundle also defines `FPRIME_EVENTS`: the F Prime event packet (events MID = `0x0800 |
 ComCfg.Apid.FW_PACKET_LOG`, `FPRIME_DESCRIPTOR` = the log descriptor) with the whole event record (id, time, arguments)
 as one opaque `RECORD` block. `FPRIME_EVENTS`, `FPRIME_PACKETS`, `FPRIME_CHANNELS` and `FPRIME_UNKNOWN` (the fprime-cosmos transport's reserved
 name) are reserved (in any letter case): a
@@ -263,16 +273,16 @@ id, are dropped there). Without this packet nasa's ID-less file packets (`TA_AFF
 the event packets. The packet is omitted with a warning on stderr (the manifest then has no `events` message id) when
 `ComCfg.Apid` or the packet-type enumeration has no `FW_PACKET_LOG`.
 
-`manifest.json` `message_ids` lists `command`, `packetized_telemetry`, `channelized_telemetry` (channelized mode
-only) and `events` (only when `FPRIME_EVENTS` is generated); `lib/fprime_<target>_msg_id.rb` (lower-cased target name) holds the same values as
-`CMD_MID`, `PACKETS_TLM_MID`, `CHANNELS_TLM_MID` and `EVENTS_TLM_MID`. The merge's cross-bundle collision check and
+`manifest.json` `message_ids` lists `command`, `packetized_telemetry` (packetizer) or `channelized_telemetry`
+(channelizer), and `events` (only when `FPRIME_EVENTS` is generated); `lib/fprime_<target>_msg_id.rb` (lower-cased target name) holds the same values as
+`CMD_MID`, `PACKETS_TLM_MID` or `CHANNELS_TLM_MID`, and `EVENTS_TLM_MID`. The merge's cross-bundle collision check and
 `tests/cosmos/load_test.rb` read these keys, so consumers must treat `events` as optional.
 
 `tests/cosmos/run.sh <bundle> <TARGET> [version] [--header12] [--nasa <cfs-cosmos-plugin>] [--image REF]` loads a bundle into
 the real `openc3` gem in Docker (7.5.1 by default) with the shipped `runtime/compat` helpers (cFE 7, 16-byte
 telemetry header; `--header12` swaps in the 12-byte header stub of `tests/cosmos/stubs/header12`), identifies a
-packet, a channel and (when the bundle has it) an `FPRIME_EVENTS` packet with a byte-exact `RECORD`, splits a
-multi-record channel packet, builds a command and checks the checksum protocol;
+packet (packetizer bundle) or a channel and a split multi-record channel packet (channelizer bundle), plus (when the
+bundle has it) an `FPRIME_EVENTS` packet with a byte-exact `RECORD`, builds a command and checks the checksum protocol;
 `--nasa` additionally compares the helpers' header items with the plugin's `cfs_packet_headers.rb`; `--image`
 substitutes an image reference (e.g. digest-pinned) for `openc3inc/openc3-cosmos-cmd-tlm-api:<version>`.
 

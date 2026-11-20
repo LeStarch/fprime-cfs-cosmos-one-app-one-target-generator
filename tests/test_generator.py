@@ -4,12 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from fprime_cfs_cosmos_generator import cfs, generator
+from fprime_cfs_cosmos_generator import cfs, emit, generator
 
 
 def test_write_bundle_is_standalone(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    artifacts = generator.write_bundle(app, tmp_path, "AP", channelized=True)
+    artifacts = generator.write_bundle(app, tmp_path, "channelizer", "AP")
     root = artifacts.directory
     assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()) == [
         "lib/fprime_ap_msg_id.rb",
@@ -26,7 +26,7 @@ def test_write_bundle_is_standalone(dictionary, tmp_path):
 def test_target_file_names_are_relative_to_cmd_tlm(dictionary, tmp_path):
     """COSMOS joins <target>/cmd_tlm/<name> itself; a cmd_tlm/ prefix makes plugin install fail"""
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     expected = "LANGUAGE ruby\nTLM_UNIQUE_ID_MODE\nCOMMANDS fprime_cmd.txt\nTELEMETRY fprime_tlm.txt\n"
     assert (root / "targets/AP/target.txt").read_text() == expected
 
@@ -56,7 +56,7 @@ def test_plugin_fragment_uses_only_plugin_txt_keywords():
     """openc3 PluginModel accepts VARIABLE/TARGET/INTERFACE blocks only; e.g. VARIABLE_DESCRIPTION is rejected"""
     keywords = {
         line.split()[0]
-        for line in generator.emit_plugin_fragment("AP").splitlines()
+        for line in generator.emit_plugin_fragment("AP", "channelizer").splitlines()
         if line.strip() and not line.startswith("#")
     }
     assert keywords == {"VARIABLE", "TARGET", "MAP_TARGET", "PROTOCOL"}
@@ -64,13 +64,13 @@ def test_plugin_fragment_uses_only_plugin_txt_keywords():
 
 def test_exact_ruby_helper_contract(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     commands = (root / "targets/AP/cmd_tlm/fprime_cmd.txt").read_text()
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     assert "<%= Ccsds.cmd(@CMD_MID_STR, 0, 6) %>" in commands
     assert "<%= Ccsds.cmd(@CMD_MID_STR, 0, 48) %>" in commands
-    assert "<%= Ccsds.tlm(@PACKETS_TLM_MID_STR) %>" in telemetry
     assert "<%= Ccsds.tlm(@CHANNELS_TLM_MID_STR) %>" in telemetry
+    assert "PACKETS_TLM_MID" not in telemetry
     assert "CCSDS_SPARE" not in telemetry
     assert "SPARE_FOR_64_ALIGN" not in telemetry
     assert "SUBPACKET" not in telemetry
@@ -78,12 +78,13 @@ def test_exact_ruby_helper_contract(dictionary, tmp_path):
 
 def test_flat_telemetry_identifies_each_record_by_mid_descriptor_and_id(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP").directory
-    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
-    packet = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> Health ") :].split("\n\n")[0]
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
+    packets = generator.emit_telemetry(app, "AP", "packetizer")
+    packet = packets[packets.index("TELEMETRY <%= @APP_PREFIX_STR %> Health ") :].split("\n\n")[0]
     assert "<%= Ccsds.tlm(@PACKETS_TLM_MID_STR) %>" in packet
     assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 32 " in packet
     assert "APPEND_ID_ITEM FPRIME_PACKET_ID 16 UINT 1 " in packet
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     channel = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> CfsCore.cmdDisp.CommandsDispatched ") :]
     channel = channel.split("\n\n")[0]
     assert "<%= Ccsds.tlm(@CHANNELS_TLM_MID_STR) %>" in channel
@@ -99,13 +100,14 @@ def test_flat_telemetry_identifies_each_record_by_mid_descriptor_and_id(dictiona
     ]
 
 
-def test_subpacketizer_mode_for_cosmos_6_10(dictionary, tmp_path):
+@pytest.mark.parametrize("source", generator.TELEMETRY_SOURCES)
+def test_subpacketizer_mode_for_cosmos_6_10(dictionary, tmp_path, source):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP", subpacketizer=True).directory
+    root = generator.write_bundle(app, tmp_path, source, "AP", subpacketizer=True).directory
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     assert "  SUBPACKETIZER fprime_subpacketizer.rb" in telemetry
     assert "  SUBPACKET\n  SUBPACKET" not in telemetry
-    assert telemetry.count("<%= Ccsds.tlm(") == 3  # packets parent, channels parent, events
+    assert telemetry.count("<%= Ccsds.tlm(") == 2  # channels parent, events
     assert (root / "lib/fprime_subpacketizer.rb").exists()
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["telemetry_mode"] == "subpacketizer"
@@ -114,16 +116,16 @@ def test_subpacketizer_mode_for_cosmos_6_10(dictionary, tmp_path):
 
 def test_manifest_and_plugin_fragment(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["target"] == "AP"
     assert manifest["function_code"] == 0
     assert manifest["message_ids"] == {
         "command": "0x1800",
-        "packetized_telemetry": "0x0820",
         "channelized_telemetry": "0x0801",
         "events": "0x0802",
     }
+    assert manifest["telemetry_source"] == "channelizer"
     fragment = (root / "plugin.fragment.txt").read_text()
     assert "VARIABLE fprime_ap_target_name AP" in fragment
     assert "MAP_TARGET <%= fprime_ap_target_name %>" in fragment
@@ -132,25 +134,80 @@ def test_manifest_and_plugin_fragment(dictionary, tmp_path):
 
 def test_generation_is_deterministic(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    first = generator.write_bundle(app, tmp_path / "first", "AP").directory
-    second = generator.write_bundle(app, tmp_path / "second", "AP").directory
+    first = generator.write_bundle(app, tmp_path / "first", "packetizer", "AP").directory
+    second = generator.write_bundle(app, tmp_path / "second", "packetizer", "AP").directory
     first_files = {path.relative_to(first): path.read_bytes() for path in first.rglob("*") if path.is_file()}
     second_files = {path.relative_to(second): path.read_bytes() for path in second.rglob("*") if path.is_file()}
     assert first_files == second_files
 
 
-def test_no_channelized_output(dictionary, tmp_path):
+def _telemetry_names(text):
+    return {line.split()[4] for line in text.splitlines() if line.startswith("TELEMETRY ")}
+
+
+def test_packetizer_emits_packets_only(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP", channelized=False).directory
+    root = generator.write_bundle(app, tmp_path, "packetizer", "AP").directory
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    assert _telemetry_names(telemetry) == {emit.full_name(packet) for packet in dictionary.packets} | {"FPRIME_EVENTS"}
+    assert "CHANNELS_TLM_MID" not in telemetry and "FPRIME_CHANNEL_ID" not in telemetry
+    assert "CHANNELS_TLM_MID" not in (root / "lib/fprime_ap_msg_id.rb").read_text()
     manifest = json.loads((root / "manifest.json").read_text())
-    assert "FPRIME_CHANNELS" not in telemetry
-    assert "channelized_telemetry" not in manifest["message_ids"]
-    # events are not channel telemetry: they stay regardless of the channelized flag
+    assert manifest["telemetry_source"] == "packetizer"
+    assert manifest["message_ids"] == {"command": "0x1800", "packetized_telemetry": "0x0820", "events": "0x0802"}
+    # events are neither packet nor channel telemetry: they are defined for either telemetry source
     assert "TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS " in telemetry
     assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in telemetry
-    assert manifest["message_ids"]["events"] == "0x0802"
     assert "EVENTS_TLM_MID" in (root / "lib/fprime_ap_msg_id.rb").read_text()
+    assert manifest["shared_files"] == ["lib/protocol_ccsds_checksum_compat.rb"]
+    assert "ProtocolFprimeChannelSplitter" not in (root / "plugin.fragment.txt").read_text()
+
+
+def test_channelizer_emits_channels_only(dictionary, tmp_path):
+    app = cfs.cfs_app(dictionary)
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
+    telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
+    assert _telemetry_names(telemetry) == {emit.full_name(channel) for channel in dictionary.channels} | {
+        "FPRIME_EVENTS"
+    }
+    assert "PACKETS_TLM_MID" not in telemetry and "FPRIME_PACKET_ID" not in telemetry
+    assert "PACKETS_TLM_MID" not in (root / "lib/fprime_ap_msg_id.rb").read_text()
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["message_ids"] == {"command": "0x1800", "channelized_telemetry": "0x0801", "events": "0x0802"}
+
+
+def test_unused_telemetry_mid_is_not_reserved(dictionary, tmp_path):
+    """A packetizer target does not claim the channel MID, so another target may own it (and vice versa)"""
+    app = cfs.cfs_app(dictionary)
+    for source, unused in (("packetizer", "0x0801"), ("channelizer", "0x0820")):
+        other = tmp_path / f"{source}.json"
+        other.write_text(json.dumps({"target": "OTHER", "message_ids": {"telemetry": unused}}))
+        generator.write_bundle(app, tmp_path / source, source, "AP", reserved_manifests=(other,))
+
+
+def test_telemetry_source_is_validated(dictionary, tmp_path, monkeypatch):
+    app = cfs.cfs_app(dictionary)
+    with pytest.raises(generator.GeneratorError, match="must be one of: packetizer, channelizer"):
+        generator.write_bundle(app, tmp_path, "both", "AP")
+    monkeypatch.setattr(type(dictionary), "packets", property(lambda self: []))
+    with pytest.raises(generator.GeneratorError, match="needs a dictionary with telemetry packets"):
+        generator.write_bundle(app, tmp_path, "packetizer", "AP")
+    assert not (tmp_path / "AP").exists()
+
+
+def test_cli_requires_telemetry_source(tmp_path, capsys):
+    from conftest import DICTIONARY
+
+    from fprime_cfs_cosmos_generator import cli
+
+    common = ["--dictionary", str(DICTIONARY), "--output", str(tmp_path), "--target-name", "AP"]
+    for arguments in (common, [*common, "--telemetry-source", "both"], [*common, "--no-channelized"]):
+        with pytest.raises(SystemExit) as error:
+            cli.main(arguments)
+        assert error.value.code == 2
+    assert "--telemetry-source" in capsys.readouterr().err
+    assert cli.main([*common, "--telemetry-source=packetizer"]) == 0
+    assert json.loads((tmp_path / "AP/manifest.json").read_text())["telemetry_source"] == "packetizer"
 
 
 def test_reserved_manifest_rejects_target_and_mid_collisions(dictionary, tmp_path):
@@ -158,12 +215,12 @@ def test_reserved_manifest_rejects_target_and_mid_collisions(dictionary, tmp_pat
     target_collision = tmp_path / "target.json"
     target_collision.write_text(json.dumps({"target": "AP", "message_ids": {}}))
     with pytest.raises(generator.GeneratorError, match="Target name AP"):
-        generator.write_bundle(app, tmp_path / "out", "AP", reserved_manifests=(target_collision,))
+        generator.write_bundle(app, tmp_path / "out", "packetizer", "AP", reserved_manifests=(target_collision,))
 
     mid_collision = tmp_path / "mid.json"
     mid_collision.write_text(json.dumps({"target": "OTHER", "message_ids": {"ordinary_command": "0x1800"}}))
     with pytest.raises(generator.GeneratorError, match=r"0x1800.*ordinary_command"):
-        generator.write_bundle(app, tmp_path / "out", "AP", reserved_manifests=(mid_collision,))
+        generator.write_bundle(app, tmp_path / "out", "packetizer", "AP", reserved_manifests=(mid_collision,))
 
 
 def test_checksum_runtime_updates_length_and_both_field_names():
@@ -175,7 +232,7 @@ def test_checksum_runtime_updates_length_and_both_field_names():
 
 def test_fprime_items_are_big_endian_regardless_of_processor_endian(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     for name in ("fprime_cmd.txt", "fprime_tlm.txt"):
         for line in (root / "targets/AP/cmd_tlm" / name).read_text().splitlines():
             tokens = line.split()
@@ -185,23 +242,23 @@ def test_fprime_items_are_big_endian_regardless_of_processor_endian(dictionary, 
 
 def test_fragment_declares_target_and_channel_splitter(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     fragment = (root / "plugin.fragment.txt").read_text()
     assert "TARGET AP <%= fprime_ap_target_name %>" in fragment
     assert "  PROTOCOL READ ProtocolFprimeChannelSplitter" in fragment
     assert (root / "lib/protocol_fprime_channel_splitter.rb").exists()
-    flat_no_channels = generator.write_bundle(app, tmp_path / "nc", "AP", channelized=False).directory
+    flat_no_channels = generator.write_bundle(app, tmp_path / "nc", "packetizer", "AP").directory
     assert "ProtocolFprimeChannelSplitter" not in (flat_no_channels / "plugin.fragment.txt").read_text()
     assert not (flat_no_channels / "lib/protocol_fprime_channel_splitter.rb").exists()
 
 
 def test_target_names_are_uppercased_and_output_is_guarded(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    assert generator.write_bundle(app, tmp_path, "App_A").directory.name == "APP_A"
+    assert generator.write_bundle(app, tmp_path, "packetizer", "App_A").directory.name == "APP_A"
     (tmp_path / "PLAIN").mkdir()
     (tmp_path / "PLAIN" / "keep.txt").write_text("not generated")
     with pytest.raises(generator.GeneratorError, match="not a generated bundle"):
-        generator.write_bundle(app, tmp_path, "PLAIN")
+        generator.write_bundle(app, tmp_path, "packetizer", "PLAIN")
     assert (tmp_path / "PLAIN" / "keep.txt").exists()
 
 
@@ -272,7 +329,7 @@ def test_limits_leave_unspecified_sides_open(data_type, bit_size, bounds, expect
 def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
     assert app.events_mid == 0x0802
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     events = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
     # the wire layout the fprime-cosmos cosmos transport relies on: RECORD starts right after the descriptor
@@ -288,7 +345,7 @@ def test_events_packet_is_the_opaque_record_identified_by_mid_and_descriptor(dic
     assert "  EVENTS_TLM_MID = '0x0802'" in (root / "lib/fprime_ap_msg_id.rb").read_text()
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["message_ids"]["events"] == "0x0802"
-    subpacketized = generator.write_bundle(app, tmp_path / "sub", "AP", subpacketizer=True).directory
+    subpacketized = generator.write_bundle(app, tmp_path / "sub", "channelizer", "AP", subpacketizer=True).directory
     sub_tlm = (subpacketized / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     sub_events = sub_tlm[sub_tlm.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS ") :].split("\n\n")[0]
     assert "@EVENTS_TLM_MID_STR = FprimeMsgId_AP::EVENTS_TLM_MID" in sub_tlm
@@ -303,8 +360,8 @@ def test_events_packet_is_skipped_with_a_warning_without_a_log_apid(dictionary, 
     ):
         app = cfs.cfs_app(dictionary)
     assert app.events_mid is None
-    assert "events" not in app.message_ids()
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    assert "events" not in app.message_ids(True)
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     assert "FPRIME_EVENTS" not in telemetry
     assert "EVENTS_TLM_MID" not in telemetry  # a preamble reference without the constant breaks plugin install
@@ -315,39 +372,41 @@ def test_events_packet_is_skipped_with_a_warning_without_a_log_apid(dictionary, 
 @pytest.mark.parametrize("name", ["fprime_events", "FPRIME_PACKETS", "Fprime_Channels", "FPRIME_unknown"])
 def test_reserved_packet_names_are_refused(dictionary, tmp_path, name):
     app = cfs.cfs_app(dictionary)
-    previous = generator.write_bundle(app, tmp_path, "AP").directory  # a bundle from an earlier run
+    previous = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory  # a bundle from an earlier run
     before = {p.relative_to(previous): p.read_bytes() for p in previous.rglob("*") if p.is_file()}
     packet = app.dictionary.packets[0]
     with (
         patch.object(packet, "get_name", return_value=name),
         pytest.raises(generator.GeneratorError, match="collides"),
     ):
-        generator.write_bundle(app, tmp_path, "AP")
+        generator.write_bundle(app, tmp_path, "channelizer", "AP")
     after = {p.relative_to(previous): p.read_bytes() for p in previous.rglob("*") if p.is_file()}
     assert after == before  # refused before any filesystem change: the previous bundle is untouched
     with patch.object(packet, "get_name", return_value=name), pytest.raises(generator.GeneratorError, match="collides"):
-        generator.emit_telemetry(app, "AP")  # the public emitter is guarded too
-    assert generator.write_bundle(app, tmp_path, "AP").manifest_path.is_file()
+        generator.emit_telemetry(app, "AP", "channelizer")  # the public emitter is guarded too
+    assert generator.write_bundle(app, tmp_path, "channelizer", "AP").manifest_path.is_file()
 
 
-def test_duplicate_message_ids_are_refused(dictionary, tmp_path):
-    app = dataclasses.replace(cfs.cfs_app(dictionary), events_mid=cfs.cfs_app(dictionary).packets_mid)
+@pytest.mark.parametrize("source,mid", [("packetizer", "packets_mid"), ("channelizer", "channels_mid")])
+def test_duplicate_message_ids_are_refused(dictionary, tmp_path, source, mid):
+    """The events MID must differ from the telemetry MID of the selected source"""
+    app = dataclasses.replace(cfs.cfs_app(dictionary), events_mid=getattr(cfs.cfs_app(dictionary), mid))
     with pytest.raises(generator.GeneratorError, match="must be distinct"):
-        generator.write_bundle(app, tmp_path, "AP")
+        generator.write_bundle(app, tmp_path, source, "AP")
 
 
 def test_events_mid_without_a_log_packet_type_fails_loudly(dictionary, tmp_path):
-    previous = generator.write_bundle(cfs.cfs_app(dictionary), tmp_path, "AP").directory
+    previous = generator.write_bundle(cfs.cfs_app(dictionary), tmp_path, "channelizer", "AP").directory
     before = {p.relative_to(previous): p.read_bytes() for p in previous.rglob("*") if p.is_file()}
     types = {k: v for k, v in dictionary.layout.packet_types.items() if k != "FW_PACKET_LOG"}
     with patch.object(dictionary, "layout", dataclasses.replace(dictionary.layout, packet_types=types)):
         with pytest.warns(UserWarning, match="FPRIME_EVENTS is not generated"):
             app = dataclasses.replace(cfs.cfs_app(dictionary), events_mid=0x0802)  # the cfs_app() guard bypassed
         with pytest.raises(generator.GeneratorError, match="FW_PACKET_LOG"):
-            generator.write_bundle(app, tmp_path, "AP")
+            generator.write_bundle(app, tmp_path, "channelizer", "AP")
     after = {p.relative_to(previous): p.read_bytes() for p in previous.rglob("*") if p.is_file()}
     assert after == before  # rendered before any write: the previous bundle is untouched
-    assert generator.write_bundle(cfs.cfs_app(dictionary), tmp_path, "AP").manifest_path.is_file()
+    assert generator.write_bundle(cfs.cfs_app(dictionary), tmp_path, "channelizer", "AP").manifest_path.is_file()
 
 
 def test_events_descriptor_is_the_log_packet_type_not_the_apid(dictionary):
@@ -355,7 +414,7 @@ def test_events_descriptor_is_the_log_packet_type_not_the_apid(dictionary):
     with patch.object(dictionary, "layout", dataclasses.replace(dictionary.layout, packet_types=types)):
         app = cfs.cfs_app(dictionary)
         assert app.events_mid == 0x0802  # the APID (2) is unchanged
-        telemetry = generator.emit_telemetry(app, "AP")
+        telemetry = generator.emit_telemetry(app, "AP", "channelizer")
     events = telemetry[telemetry.index("TELEMETRY <%= @APP_PREFIX_STR %> FPRIME_EVENTS") :]
     assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 9 " in events
     assert "APPEND_ID_ITEM FPRIME_DESCRIPTOR 16 UINT 2 " not in events
@@ -370,8 +429,8 @@ def test_events_packet_is_skipped_without_a_log_packet_type(dictionary, tmp_path
         assert dictionary.layout.log_descriptor is None
         app = cfs.cfs_app(dictionary)
     assert app.events_mid is None
-    assert "events" not in app.message_ids()
-    root = generator.write_bundle(app, tmp_path, "AP").directory
+    assert "events" not in app.message_ids(True)
+    root = generator.write_bundle(app, tmp_path, "channelizer", "AP").directory
     telemetry = (root / "targets/AP/cmd_tlm/fprime_tlm.txt").read_text()
     assert "FPRIME_EVENTS" not in telemetry
     assert "EVENTS_TLM_MID" not in telemetry  # a preamble reference without the constant breaks plugin install
@@ -387,8 +446,8 @@ def test_events_apid_must_be_eleven_bits(dictionary):
 
 def test_reserved_manifest_rejects_the_events_mid(dictionary, tmp_path):
     app = cfs.cfs_app(dictionary)
-    assert app.message_ids()["events"] == 0x0802
+    assert app.message_ids(True)["events"] == 0x0802
     manifest = tmp_path / "other.json"
     manifest.write_text(json.dumps({"target": "OTHER", "message_ids": {"command": "0x0802"}}))
     with pytest.raises(generator.GeneratorError, match="0x0802 \\(events\\)"):
-        generator.write_bundle(app, tmp_path / "out", "AP", reserved_manifests=(manifest,))
+        generator.write_bundle(app, tmp_path / "out", "channelizer", "AP", reserved_manifests=(manifest,))
